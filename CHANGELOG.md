@@ -6,6 +6,8 @@ All notable changes to Hark are documented here. The format is loosely based on
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-16
+
 ### Added
 - Existing output files are protected instead of silently clobbered. Before
   capture starts — before permission prompts and model loading — Hark checks
