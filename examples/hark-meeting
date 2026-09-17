@@ -6,11 +6,17 @@
 # UI (space = pause/resume, m = mute mic, y = yank transcript to clipboard,
 # Enter = finish, Ctrl-C = stop), writing both an MP3
 # and a speaker-labeled transcript named after the meeting. When it ends, it
-# runs the transcript through fabric-ai's `summarize_meeting` pattern to produce
-# a Markdown summary.
+# runs the transcript through a fabric-ai pattern to produce a Markdown summary.
+#
+# Which pattern? Once the recording is done, it opens an `fzf` picker over every
+# installed fabric pattern, with the pattern's own text in the preview pane, so
+# you can decide after the fact (summarize_meeting for a status call,
+# extract_recommendations for a review, …). Esc keeps the default. Set
+# $FABRIC_PATTERN to skip the picker entirely.
 #
 # Usage:
 #   hark-meeting "Team Sync"
+#   FABRIC_PATTERN=extract_recommendations hark-meeting "Design Review"
 #
 # Output (in $HARK_MEETINGS_DIR, default current directory):
 #   2026-06-20-team-sync.mp3   audio recording
@@ -19,13 +25,15 @@
 #
 # Environment:
 #   HARK_MEETINGS_DIR   where to write artifacts          (default: .)
-#   FABRIC_PATTERN       fabric pattern for the summary     (default: summarize_meeting)
+#   FABRIC_PATTERN       pattern for the summary; skips the picker
+#                        (default: choose with fzf, else summarize_meeting)
 #   FABRIC_MODEL         model passed to fabric-ai (-m)     (default: fabric's default)
 #   HARK_ENGINE/...     any HARK_* var Hark already honors (engine, model, language…)
 #
 # Requirements: `hark`, `fabric-ai`, and the macOS "System Audio Recording"
 # permission for your terminal (see docs/permissions.md). Acoustic speaker
 # diarization needs Apple Silicon; on Intel it falls back to You/Others.
+# `fzf` is optional — without it the summary uses summarize_meeting.
 
 set -euo pipefail
 
@@ -33,7 +41,7 @@ die() { print -u2 -- "hark-meeting: $*"; exit 1 }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1" }
 
 [[ $# -ge 1 && -n "${1:-}" ]] || die 'usage: hark-meeting "Meeting name"'
-[[ "$1" == "-h" || "$1" == "--help" ]] && { sed -n '2,30p' "$0"; exit 0 }
+[[ "$1" == "-h" || "$1" == "--help" ]] && { sed -n '2,$ { /^#/!q; p; }' "$0"; exit 0 }
 
 need hark
 need fabric-ai
@@ -54,6 +62,13 @@ md="$base.md"
 
 print -u2 -- "hark-meeting: recording → $mp3 (Enter to finish, space to pause, m to mute, y to yank)"
 
+# Hark's interactive UI puts the terminal in cbreak mode. It restores it on the
+# normal paths, but if it is killed before it installs its signal handler (say,
+# Ctrl-C during a first-run model download) the tty would stay raw and break the
+# pattern picker below — so keep a copy and put it back either way.
+tty_state=""
+[[ -t 0 ]] && tty_state=$(stty -g 2>/dev/null) || true
+
 # Don't let a signal-based exit (Ctrl-C => 130) abort the script before we
 # summarize; decide based on whether a transcript was actually produced.
 set +e
@@ -61,11 +76,38 @@ hark --interactive --system --mix --speakers -a "$mp3" -t "$txt"
 rc=$?
 set -e
 
+[[ -n "$tty_state" ]] && stty "$tty_state" 2>/dev/null || true
+
 if [[ ! -s "$txt" ]]; then
   die "no transcript was produced (hark exited $rc); nothing to summarize."
 fi
 
-pattern="${FABRIC_PATTERN:-summarize_meeting}"
+# Choose the pattern now that we know a transcript exists: $FABRIC_PATTERN wins,
+# otherwise offer an fzf picker over the installed patterns. Anything that makes
+# the picker unavailable or inconclusive — no fzf, no terminal, Esc — falls back
+# to the default rather than leaving the meeting unsummarized.
+default_pattern=summarize_meeting
+pattern="${FABRIC_PATTERN:-}"
+
+if [[ -z "$pattern" ]]; then
+  if [[ ! -t 0 ]]; then
+    : # Not interactive (cron, CI, piped input): take the default, quietly.
+  elif ! command -v fzf >/dev/null 2>&1; then
+    print -u2 -- "hark-meeting: fzf not found; using $default_pattern (set FABRIC_PATTERN to override)"
+  else
+    # `if` suppresses set -e, so a cancelled picker (fzf exits 130) is not fatal.
+    if ! pattern=$(fabric-ai --listpatterns --shell-complete-list 2>/dev/null |
+        fzf --prompt='fabric pattern > ' \
+            --height=80% --layout=reverse --border --info=inline \
+            --header="Enter = summarize with this pattern · Esc = $default_pattern" \
+            --preview='fabric-ai --readpattern={} 2>/dev/null' \
+            --preview-window='right,60%,wrap'); then
+      pattern=""
+    fi
+  fi
+  pattern="${pattern:-$default_pattern}"
+fi
+
 typeset -a model_args; model_args=()
 [[ -n "${FABRIC_MODEL:-}" ]] && model_args=(-m "$FABRIC_MODEL")
 

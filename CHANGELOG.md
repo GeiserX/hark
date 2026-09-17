@@ -6,6 +6,29 @@ All notable changes to Hark are documented here. The format is loosely based on
 
 ## [Unreleased]
 
+### Changed
+- `examples/hark-meeting` now asks which fabric pattern to summarize with,
+  instead of always using `summarize_meeting`. The prompt is an `fzf` picker over
+  the installed patterns with the pattern's own text in a preview pane
+  (`fabric-ai --readpattern`), and it runs *after* the recording — so the choice
+  can be made having heard how the meeting went. Behaviour change: leaving
+  `$FABRIC_PATTERN` unset now prompts rather than silently defaulting; set it
+  (e.g. `FABRIC_PATTERN=summarize_meeting`) to keep the old non-interactive
+  behaviour. Falls back to `summarize_meeting` whenever the picker can't or
+  shouldn't run: no `fzf` installed (with a hint on stderr), stdin not a
+  terminal (silently, so cron/CI stay quiet), or the picker cancelled with Esc.
+  `fzf` is an optional dependency — the recipe still works without it.
+
+### Fixed
+- `examples/hark-meeting --help` printed a stray blank line and `set -euo
+  pipefail` after the header, because it extracted a hardcoded line range. It
+  now stops at the first non-comment line, so the header can grow freely.
+- `examples/hark-meeting` now saves and restores the terminal's `stty` state
+  around the recording. Hark restores cbreak mode itself on the normal paths,
+  but if it is killed before installing its signal handler (e.g. Ctrl-C during a
+  first-run model download) the terminal was left with no echo, which would also
+  have broken the new pattern picker.
+
 ## [0.4.1] - 2026-07-22
 
 ### Fixed

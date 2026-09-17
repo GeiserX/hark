@@ -6,7 +6,7 @@ tweak it to taste, and drop it somewhere on your `PATH`.
 
 | Script | What it does |
 | --- | --- |
-| [`hark-meeting`](hark-meeting) | Record a meeting (system + mic) interactively, then summarize the transcript with fabric-ai. |
+| [`hark-meeting`](hark-meeting) | Record a meeting (system + mic) interactively, then summarize the transcript with a fabric-ai pattern you pick from an `fzf` menu afterwards. |
 | [`hark-note`](hark-note) | Quick spoken voice memo → timestamped audio + transcript. |
 | [`hark-dictate`](hark-dictate) | Speak for a few seconds → text on your clipboard. |
 | [`hark-meet.user.js`](hark-meet.user.js) | Browser userscript (Tampermonkey): auto-record Google Meet calls and mirror your Meet mic mute to the recording. |
@@ -48,6 +48,8 @@ mirrors your Google Meet mic mute to the recording. See
   `--engine`/`$HARK_ENGINE` / `hark config`.
 - **`fabric-ai`** — only for `hark-meeting`'s summary step
   (<https://github.com/danielmiessler/fabric>), with a configured model.
+- **`fzf`** — optional, for `hark-meeting`'s pattern picker (`brew install fzf`).
+  Without it the summary just uses `summarize_meeting`.
 - **macOS permissions** — microphone for all of them; the **System Audio
   Recording** permission for `hark-meeting` (it uses `--system`). See
   [`docs/permissions.md`](../docs/permissions.md).
@@ -63,6 +65,13 @@ comment) — output directory, fabric pattern/model, capture length. For example
 HARK_MEETINGS_DIR=~/Meetings FABRIC_PATTERN=extract_recommendations \
   hark-meeting "1:1 with Sam"
 ```
+
+For `hark-meeting`, `$FABRIC_PATTERN` doubles as an opt-out: set it and the
+summary uses that pattern directly; leave it unset and the script asks which
+pattern to use (via `fzf`, with the pattern's text in a preview pane) once the
+recording is finished — so you can decide after hearing how the meeting actually
+went. Pressing Esc there keeps `summarize_meeting`. To always skip the prompt,
+export `FABRIC_PATTERN=summarize_meeting` in your shell profile.
 
 Because `hark` itself honors `$HARK_*` and `hark config`, you can set the
 engine, model, language, and more globally without touching the scripts.
