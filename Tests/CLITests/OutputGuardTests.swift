@@ -22,6 +22,22 @@ final class FakeCollisionPrompt: CollisionPrompt, @unchecked Sendable {
     }
 }
 
+/// Runs `body` and returns the `HarkError` it threw, recording an issue if it
+/// throws something else or nothing at all. Used instead of `#expect(throws:)`'s
+/// return value, which only carries the error on newer swift-testing versions.
+private func harkError(_ body: () throws -> Void) -> HarkError? {
+    do {
+        try body()
+        Issue.record("expected a HarkError, but nothing was thrown")
+        return nil
+    } catch let error as HarkError {
+        return error
+    } catch {
+        Issue.record("expected a HarkError, got \(error)")
+        return nil
+    }
+}
+
 /// Scratch directory for one test, removed afterwards.
 private struct Scratch {
     let url: URL
@@ -95,7 +111,7 @@ struct OutputGuardTests {
         let scratch = Scratch()
         defer { scratch.cleanup() }
         scratch.touch("rec.m4a", contents: "keep me")
-        let error = #expect(throws: HarkError.self) {
+        let error = harkError {
             try OutputGuard.prepare(
                 outputs(audio: scratch.path("rec.m4a")), split: nil, policy: .error,
                 prompt: FakeCollisionPrompt(available: false))
@@ -191,7 +207,7 @@ struct OutputGuardTests {
         defer { scratch.cleanup() }
         scratch.touch("rec.txt")
         let prompt = FakeCollisionPrompt(available: false, answer: .overwrite)
-        let error = #expect(throws: HarkError.self) {
+        let error = harkError {
             try OutputGuard.prepare(
                 outputs(transcript: scratch.path("rec.txt")), split: nil, policy: .ask,
                 prompt: prompt)
@@ -205,7 +221,7 @@ struct OutputGuardTests {
         let scratch = Scratch()
         defer { scratch.cleanup() }
         scratch.touch("rec.txt", contents: "yesterday")
-        let error = #expect(throws: HarkError.self) {
+        let error = harkError {
             try OutputGuard.prepare(
                 outputs(transcript: scratch.path("rec.txt")), split: nil, policy: .ask,
                 prompt: FakeCollisionPrompt(answer: .cancel))
@@ -219,7 +235,7 @@ struct OutputGuardTests {
         let scratch = Scratch()
         defer { scratch.cleanup() }
         scratch.touch("rec.txt")
-        let error = #expect(throws: HarkError.self) {
+        let error = harkError {
             try OutputGuard.prepare(
                 outputs(transcript: scratch.path("rec.txt")), split: nil, policy: .ask,
                 prompt: FakeCollisionPrompt(answer: nil))
@@ -275,7 +291,7 @@ struct OutputGuardTests {
     @Test func aDirectoryOutputIsRejected() throws {
         let scratch = Scratch()
         defer { scratch.cleanup() }
-        let error = #expect(throws: HarkError.self) {
+        let error = harkError {
             try OutputGuard.prepare(
                 outputs(audio: scratch.url.path), split: nil, policy: .overwrite,
                 prompt: FakeCollisionPrompt(available: false))
@@ -288,12 +304,12 @@ struct OutputGuardTests {
         let scratch = Scratch()
         defer { scratch.cleanup() }
         let source = scratch.touch("clip.wav")
-        let error = #expect(throws: HarkError.self) {
+        let error = harkError {
             try OutputGuard.checkDistinct(input: source, outputs: outputs(audio: source))
         }
         #expect(error?.code == .usage)
         // The same file reached by a different spelling is still the same file.
-        let error2 = #expect(throws: HarkError.self) {
+        let error2 = harkError {
             try OutputGuard.checkDistinct(
                 input: scratch.path("./clip.wav"), outputs: outputs(audio: source))
         }
@@ -304,7 +320,7 @@ struct OutputGuardTests {
         let scratch = Scratch()
         defer { scratch.cleanup() }
         let path = scratch.path("both.txt")
-        let error = #expect(throws: HarkError.self) {
+        let error = harkError {
             try OutputGuard.checkDistinct(
                 input: nil, outputs: outputs(audio: path, transcript: path))
         }
