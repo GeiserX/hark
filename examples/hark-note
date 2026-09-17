@@ -45,7 +45,10 @@ else
   print -u2 -- "hark-note: recording → $base.m4a (Ctrl-C to stop)"
 fi
 
-hark "${dur_args[@]}" -a "$base.m4a" -t "$base.txt"
+# The name carries a to-the-second timestamp, so it can't realistically collide;
+# --if-exists error keeps that a loud failure rather than a prompt or a silent
+# rename (which would make the paths printed below wrong).
+hark "${dur_args[@]}" --if-exists error -a "$base.m4a" -t "$base.txt"
 
 print -- "Saved:"
 print -- "  audio:      $base.m4a"

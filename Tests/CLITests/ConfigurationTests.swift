@@ -81,6 +81,7 @@ struct ConfigurationTests {
             case .speakerMode: raw = "source"
             case .speakerLabels: raw = "Me,Them"
             case .diarizeEngine: raw = "offline"
+            case .ifExists: raw = "unique"
             case .maxSpeakers: raw = "5"
             case .remoteControlPort: raw = "8473"
             }

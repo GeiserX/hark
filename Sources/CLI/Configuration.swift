@@ -19,6 +19,7 @@ struct Configuration: Codable, Equatable {
 
     // General
     var directory: String?
+    var ifExists: String?
 
     // Capture
     var captureBackend: String?
@@ -49,6 +50,7 @@ struct Configuration: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case model, engine, language, translate, device
         case directory
+        case ifExists = "if-exists"
         case captureBackend = "capture-backend"
         case rate, bits, channels
         case keepAwake = "keep-awake"
@@ -122,6 +124,10 @@ struct Configuration: Codable, Equatable {
         TypedSetting(.directory, .string, "(current directory)", \.directory,
             parse: { try ConfigKey.parseDirectory($0, .directory) }, format: { $0 },
             summary: "Base directory for relative artifact paths (-i/-a/-t/--split)."),
+        TypedSetting(.ifExists, .choice(ExistingFilePolicy.allowedNames), "ask", \.ifExists,
+            parse: { try ConfigKey.parseChoice($0, .ifExists, ExistingFilePolicy.allowedNames) },
+            format: { $0 },
+            summary: "What to do when an output file exists (ask, error, overwrite, unique)."),
 
         TypedSetting(.captureBackend, .choice(["auto", "sckit", "coreaudio"]), "auto", \.captureBackend,
             parse: { try ConfigKey.parseChoice($0, .captureBackend, ["auto", "sckit", "coreaudio"]) },

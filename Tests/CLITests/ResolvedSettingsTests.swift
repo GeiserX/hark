@@ -202,7 +202,8 @@ extension ResolvedSettings {
     func with(directory: String?) -> ResolvedSettings {
         ResolvedSettings(
             engine: engine, language: language, translate: translate, micDevice: micDevice,
-            directory: directory, captureBackend: captureBackend, rate: rate, bits: bits,
+            directory: directory, ifExists: ifExists, captureBackend: captureBackend,
+            rate: rate, bits: bits,
             channels: channels, keepAwake: keepAwake, silenceThreshold: silenceThreshold,
             useVad: useVad, vadThreshold: vadThreshold, useGain: useGain, speakers: speakers,
             speakerMode: speakerMode, speakerLabels: speakerLabels, diarizeEngine: diarizeEngine,

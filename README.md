@@ -224,6 +224,24 @@ hark -i talk.wav -a talk.mp3 -t talk.srt      # transcode + subtitle a file
 hark --duration 30 --split silence=2 -a memo.wav  # split on 2s of silence
 ```
 
+### Existing output files
+
+Recordings are never clobbered silently. If a file the run would write already
+exists, hark says so **before capture starts** and asks:
+
+```
+hark: 'rec.m4a' and 'rec.txt' already exist.
+      [o]verwrite  [u]nique -> 'rec-1.m4a', 'rec-1.txt'  [c]ancel
+hark: what now? [o/u/c]
+```
+
+One decision covers every output of the run, so an audio/transcript pair keeps
+matching names. Off a terminal (cron, pipes, the remote agent) hark refuses
+instead of asking and exits 73. Choose up front with
+`--if-exists ask|error|overwrite|unique` (or `$HARK_IF_EXISTS` / `hark config set
+if-exists …`) — e.g. `--if-exists unique` in a script that must never stop or
+lose data. To accumulate transcripts, let the shell append: `hark -t - >> notes.txt`.
+
 <details>
 <summary><b>Full flag, environment & config reference →</b></summary>
 
@@ -379,6 +397,7 @@ var, and a config key.
 ```sh
 hark config set engine apple
 hark config set speaker-mode source
+hark config set if-exists unique        # never ask, never clobber an old recording
 hark config show                        # every setting, its value, and its SOURCE
 hark config path                        # where the JSON file lives
 ```

@@ -164,10 +164,18 @@ curl -s -X POST http://127.0.0.1:8473/start \
 
 Relative paths resolve under the agent's working directory (`-C` at launch).
 
+**Existing files.** The agent can't ask, so it defaults to `ifExists: "unique"`:
+if `meeting.m4a` is already there, the session records `meeting-1.m4a` (and
+`meeting-1.srt` — one suffix covers both, so the pair stays aligned) and the
+response and `GET /status` report those final paths. A previous recording is
+never overwritten and a re-join never fails. Send `"ifExists": "overwrite"` to
+replace, or `"error"` to get a `409` instead. `"ask"` is rejected (`400`).
+
 | Field | Type | Maps to |
 |-------|------|---------|
 | `audio` | string | `-a/--audio` (file; `.wav/.m4a/.flac/.mp3/.opus`) |
 | `transcript` | string | `-t/--transcript` (file; `.txt/.srt/.json`) |
+| `ifExists` | string | `--if-exists` (`error`/`overwrite`/`unique`; default `unique`) |
 | `muted` | bool | start with the mic muted (requires a mic in the capture, else `422`) |
 | `system` | bool | `--system` |
 | `apps` | [string] | `--app` (repeatable) |

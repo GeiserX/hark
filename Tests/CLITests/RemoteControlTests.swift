@@ -148,6 +148,58 @@ struct StartRequestTests {
             _ = try body.makeCommand(defaults: defaults([]))
         }
     }
+
+    // MARK: Existing outputs (the agent can never prompt)
+
+    @Test func defaultsToUniqueSoASessionNeverBlocksOrClobbers() throws {
+        var body = StartRequest()
+        body.transcript = "n.txt"
+        #expect(try body.makeCommand(defaults: defaults([])).ifExists == .unique)
+        // A launch-time `ask` can't apply either — nothing would answer it.
+        #expect(
+            try body.makeCommand(defaults: defaults(["--if-exists", "ask"])).ifExists == .unique)
+    }
+
+    @Test func inheritsANonInteractiveLaunchPolicy() throws {
+        var body = StartRequest()
+        body.transcript = "n.txt"
+        let cmd = try body.makeCommand(defaults: defaults(["--if-exists", "overwrite"]))
+        #expect(cmd.ifExists == .overwrite)
+    }
+
+    @Test func requestPolicyWinsAndAskIsRejected() throws {
+        var body = StartRequest()
+        body.transcript = "n.txt"
+        body.ifExists = "OVERWRITE"
+        #expect(
+            try body.makeCommand(defaults: defaults(["--if-exists", "unique"])).ifExists
+                == .overwrite)
+        body.ifExists = "ask"
+        #expect(throws: HarkError.self) { _ = try body.makeCommand(defaults: defaults([])) }
+        body.ifExists = "clobber"
+        #expect(throws: HarkError.self) { _ = try body.makeCommand(defaults: defaults([])) }
+    }
+
+    /// `/start` and `/status` must report the paths actually being written, so
+    /// collisions are resolved before the session is registered.
+    @Test func reservedCommandCarriesTheFinalPaths() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hark-agent-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let audio = dir.appendingPathComponent("meet.m4a").path
+        let transcript = dir.appendingPathComponent("meet.txt").path
+        try "old".write(toFile: audio, atomically: true, encoding: .utf8)
+
+        var body = StartRequest()
+        body.audio = audio
+        body.transcript = transcript
+        let reserved = try body.makeCommand(defaults: defaults([])).reservingOutputs()
+        #expect(reserved.audio == dir.appendingPathComponent("meet-1.m4a").path)
+        #expect(reserved.transcript == dir.appendingPathComponent("meet-1.txt").path)
+        #expect(reserved.ifExists == .error)  // the paths are free; the re-check is a no-op
+        #expect(FileManager.default.fileExists(atPath: audio))  // previous session untouched
+    }
 }
 
 @Suite("Remote-control session manager")
@@ -261,6 +313,7 @@ struct RemoteErrorMappingTests {
         #expect(RemoteControlAgent.httpStatus(for: .noInput).code == 404)
         #expect(RemoteControlAgent.httpStatus(for: .noPermission).code == 403)
         #expect(RemoteControlAgent.httpStatus(for: .unavailable).code == 422)
+        #expect(RemoteControlAgent.httpStatus(for: .cantCreate).code == 409)
         #expect(RemoteControlAgent.httpStatus(for: .software).code == 500)
     }
 }

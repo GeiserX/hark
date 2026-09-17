@@ -6,7 +6,36 @@ All notable changes to Hark are documented here. The format is loosely based on
 
 ## [Unreleased]
 
+### Added
+- Existing output files are protected instead of silently clobbered. Before
+  capture starts — before permission prompts and model loading — Hark checks
+  every file the run would write (audio, transcript, `--split` chunk set) and
+  applies the new `--if-exists ask|error|overwrite|unique` (also
+  `$HARK_IF_EXISTS`, config `if-exists`). The whole invocation is one artifact
+  set: a single decision covers every output, and `unique` picks one suffix that
+  is free for all of them, so an audio/transcript pair stays aligned
+  (`rec-1.m4a` + `rec-1.txt`). New exit code **73** (`EX_CANTCREAT`) for a
+  refusal or a cancelled prompt.
+- `POST /start` on the remote-control agent accepts `ifExists` and defaults to
+  `unique`, so an API-driven session never blocks on a prompt and never
+  overwrites a previous recording; the response and `GET /status` report the
+  paths actually being written. An `ifExists: "error"` collision maps to `409`.
+- Naming the input as an output (`-i rec.wav -a rec.wav`), pointing `-a` and
+  `-t` at the same file, or writing to a directory are now clear errors instead
+  of a corrupt or cryptic result.
+
 ### Changed
+- **Behaviour change:** a run whose output file already exists no longer
+  overwrites it. On a terminal you are asked (`[o]verwrite  [u]nique
+  [c]ancel`); off a terminal (cron, pipes, `hark | …`) the run refuses with exit
+  73. Restore the old behaviour globally with `hark config set if-exists
+  overwrite`, or per-run with `--if-exists overwrite`. To accumulate
+  transcripts, append in the shell: `hark -t - >> notes.txt`.
+- `examples/hark-meeting` now picks the next free `-N` name itself when a
+  meeting with the same name was already recorded today (so the summary step
+  still finds the transcript), and both it and `examples/hark-note` pass
+  `--if-exists error` so a collision is a loud failure rather than a prompt or a
+  rename behind the script's back.
 - `examples/hark-meeting` now asks which fabric pattern to summarize with,
   instead of always using `summarize_meeting`. The prompt is an `fzf` picker over
   the installed patterns with the pattern's own text in a preview pane
@@ -20,6 +49,11 @@ All notable changes to Hark are documented here. The format is loosely based on
   `fzf` is an optional dependency — the recipe still works without it.
 
 ### Fixed
+- The WAV, MP3, Opus, and live-transcript writers created their output with
+  `FileManager.createFile` and then opened it with a `FileHandle`, which does
+  **not** truncate — so if the create step failed, new data was written over an
+  existing file's stale trailing bytes, yielding a corrupt hybrid. They now use
+  a single `open(2)` with `O_CREAT|O_TRUNC`.
 - `examples/hark-meeting --help` printed a stray blank line and `set -euo
   pipefail` after the header, because it extracted a hardcoded line range. It
   now stops at the first non-comment line, so the header can grow freely.

@@ -382,8 +382,7 @@ final class LiveTranscriptWriter: @unchecked Sendable {
             self.handle = .standardOutput
             self.closeHandle = false
         case .file(let path):
-            FileManager.default.createFile(atPath: path, contents: nil)
-            guard let handle = FileHandle(forWritingAtPath: path) else {
+            guard let handle = OutputFile.truncatingHandle(at: URL(fileURLWithPath: path)) else {
                 throw HarkError.ioError("cannot open transcript file '\(path)' for writing")
             }
             self.handle = handle

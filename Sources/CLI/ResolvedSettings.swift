@@ -14,6 +14,8 @@ struct ResolvedSettings: Equatable {
     let micDevice: String?
     /// Working directory for resolving relative artifact paths (nil = process CWD).
     let directory: String?
+    /// What to do when an output file already exists (PRD §6.1).
+    let ifExists: ExistingFilePolicy
 
     let captureBackend: String
     // Capture format: nil = contextual (live uses 44100/16; convert uses source).
@@ -79,6 +81,9 @@ struct ResolvedSettings: Equatable {
         let translate = try bool(a.translate, .translate, config.translate, default: false)
         let micDevice = string(a.device, .device, config.device)
         let directory = string(a.directory, .directory, config.directory)
+        let ifExists = try choice(
+            a.ifExists, .ifExists, config.ifExists,
+            allowed: ExistingFilePolicy.allowedNames, default: ExistingFilePolicy.ask)
 
         let captureBackend = try ConfigKey.parseChoice(
             string(a.captureBackend, .captureBackend, config.captureBackend, default: "auto")!,
@@ -128,7 +133,7 @@ struct ResolvedSettings: Equatable {
 
         return ResolvedSettings(
             engine: engine, language: language, translate: translate, micDevice: micDevice,
-            directory: directory,
+            directory: directory, ifExists: ifExists,
             captureBackend: captureBackend, rate: rate, bits: bits, channels: channels,
             keepAwake: keepAwake,
             silenceThreshold: silenceThreshold, useVad: useVad, vadThreshold: vadThreshold,

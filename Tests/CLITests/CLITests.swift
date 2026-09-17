@@ -17,6 +17,7 @@ struct RootParsingTests {
         #expect(hark.bits == nil)
         #expect(hark.channels == nil)
         #expect(hark.duration == nil)
+        #expect(hark.ifExists == nil)  // resolved from env/config, defaulting to ask
         #expect(!hark.raw)
         #expect(!hark.noOutput)
         // Defaults are now unset (nil) so config/env can supply them; the

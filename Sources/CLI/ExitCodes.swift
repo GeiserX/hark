@@ -11,6 +11,7 @@ import ArgumentParser
 /// | 66   | noInput        | Input file or device not found                   |
 /// | 69   | unavailable    | Feature/service not available or not implemented |
 /// | 70   | software       | Internal software error                          |
+/// | 73   | cantCreate     | Refused to write an output file (already exists) |
 /// | 74   | ioError        | I/O error (file write, audio stream)             |
 /// | 77   | noPermission   | Permission denied (e.g., TCC microphone/system)  |
 enum HarkExitCode: Int32 {
@@ -20,6 +21,7 @@ enum HarkExitCode: Int32 {
     case noInput = 66
     case unavailable = 69
     case software = 70
+    case cantCreate = 73
     case ioError = 74
     case noPermission = 77
 
@@ -36,6 +38,8 @@ struct HarkError: Error, CustomStringConvertible {
     static func noInput(_ message: String) -> HarkError { .init(code: .noInput, message: message) }
     static func unavailable(_ message: String) -> HarkError { .init(code: .unavailable, message: message) }
     static func software(_ message: String) -> HarkError { .init(code: .software, message: message) }
+    /// An output file exists and the `--if-exists` policy refused to write it.
+    static func cantCreate(_ message: String) -> HarkError { .init(code: .cantCreate, message: message) }
     static func ioError(_ message: String) -> HarkError { .init(code: .ioError, message: message) }
     static func noPermission(_ message: String) -> HarkError { .init(code: .noPermission, message: message) }
     static func usage(_ message: String) -> HarkError { .init(code: .usage, message: message) }

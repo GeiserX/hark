@@ -83,8 +83,7 @@ public final class WAVFileWriter: @unchecked Sendable {
         self.metadata = metadata
         switch destination {
         case .file(let url):
-            FileManager.default.createFile(atPath: url.path, contents: nil)
-            guard let handle = try? FileHandle(forWritingTo: url) else {
+            guard let handle = OutputFile.truncatingHandle(at: url) else {
                 throw WriterError.cannotCreateFile(url.path)
             }
             self.handle = handle

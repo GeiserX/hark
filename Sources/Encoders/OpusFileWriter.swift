@@ -71,8 +71,7 @@ public final class OpusFileWriter: @unchecked Sendable {
         guard status == noErr, let conv else { throw WriterError.encoderUnavailable(status) }
         self.converter = conv
 
-        FileManager.default.createFile(atPath: url.path, contents: nil)
-        guard let handle = FileHandle(forWritingAtPath: url.path) else {
+        guard let handle = OutputFile.truncatingHandle(at: url) else {
             AudioConverterDispose(conv)
             self.converter = nil
             throw WriterError.cannotCreateFile(url.path)

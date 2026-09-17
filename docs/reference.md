@@ -35,6 +35,30 @@ Default: the system default microphone.
 | `-t, --transcript PATH\|-` | transcript (`.txt`/`.srt`/`.json`), or `-` for text |
 | *(none)* | transcribe to stdout (the default verb) |
 | `--raw` | with `-a -`, stream headerless PCM instead of WAV |
+| `--if-exists ask\|error\|overwrite\|unique` | what to do when an output file already exists (default `ask`) |
+
+### Existing output files
+
+Nothing is ever clobbered silently. Before capture starts — so no permission
+prompt, model load, or long recording is wasted — hark checks every file the run
+would write and applies `--if-exists` (also `$HARK_IF_EXISTS` / config
+`if-exists`):
+
+| Mode | Behavior |
+|------|----------|
+| `ask` *(default)* | on a terminal, ask: `[o]verwrite  [u]nique  [c]ancel`; without a terminal (cron, pipes) it behaves like `error` |
+| `error` | refuse and exit 73, listing the files |
+| `overwrite` | replace them (for `--split`, stale `NAME_###` chunks of a previous run are removed first) |
+| `unique` | write to the next free numbered name: `rec.m4a` → `rec-1.m4a` |
+
+The whole run is treated as one artifact set: a single decision covers every
+output, and `unique` picks one suffix that is free for all of them, so an
+audio/transcript pair stays aligned (`rec-1.m4a` + `rec-1.txt`). `-` (stdout)
+and `--no-output` are never affected, and appending is the shell's job:
+`hark -t - >> notes.txt`.
+
+An output that is also the input (`-i rec.wav -a rec.wav`), or `-a` and `-t`
+pointing at the same file, is always a usage error.
 
 ## Capture / timing
 
@@ -102,6 +126,7 @@ Every setting has a flag, a `$HARK_*` env var, and a config key. The env var is
 | `translate` | `--translate`/`--no-translate` | `false` |
 | `device` | `-d/--device` | system default |
 | `directory` | `-C/--directory` | current directory |
+| `if-exists` | `--if-exists` | `ask` |
 | `capture-backend` | `--capture-backend` | `auto` |
 | `rate` / `bits` / `channels` | `-r` / `-b` / `-c` | live `44100`/`16`; convert = source |
 | `keep-awake` | `--keep-awake`/`--no-keep-awake` | `false` |
@@ -154,5 +179,6 @@ Following BSD `sysexits(3)` where applicable:
 | 66 | input file or device not found |
 | 69 | feature/engine unavailable or not implemented |
 | 70 | internal error |
+| 73 | refused to write an output file that already exists (see `--if-exists`) |
 | 74 | I/O error |
 | 77 | permission denied (microphone / system audio / speech) |

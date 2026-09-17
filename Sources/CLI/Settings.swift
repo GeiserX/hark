@@ -93,6 +93,7 @@ enum ConfigKey: String, CaseIterable {
     case translate
     case device
     case directory
+    case ifExists = "if-exists"
     case captureBackend = "capture-backend"
     case rate
     case bits

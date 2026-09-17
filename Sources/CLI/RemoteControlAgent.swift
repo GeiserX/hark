@@ -138,7 +138,9 @@ final class RemoteControlAgent: @unchecked Sendable {
                 throw HarkError.usage("invalid JSON body: \(error)")
             }
         }
-        let command = try req.makeCommand(defaults: defaults.value)
+        // Resolve existing-output collisions up front (default `unique`) so the
+        // response and `GET /status` report the paths actually being written.
+        let command = try req.makeCommand(defaults: defaults.value).reservingOutputs()
         let control = CaptureControl()
         let id = UUID().uuidString
         // begin throws .busy (→409) if a recording is already active, or
@@ -220,6 +222,8 @@ final class RemoteControlAgent: @unchecked Sendable {
         case .noInput: return .notFound
         case .noPermission: return .forbidden
         case .unavailable: return .unprocessableContent
+        // An output file already exists and the session's policy refused it.
+        case .cantCreate: return .conflict
         default: return .internalServerError
         }
     }

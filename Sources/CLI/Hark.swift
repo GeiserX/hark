@@ -142,6 +142,13 @@ struct Hark: ParsableCommand {
         valueName: "path|-"))
     var transcript: String?
 
+    @Option(name: .customLong("if-exists"), help: ArgumentHelp(
+        "What to do when an output file already exists: ask (default, on a terminal), "
+            + "error, overwrite, or unique (write rec-1.m4a). The decision covers every "
+            + "output of the run. Or $HARK_IF_EXISTS / hark config.",
+        valueName: "ask|error|overwrite|unique"))
+    var ifExists: ExistingFilePolicy?
+
     // MARK: Capture format / timing
 
     @Option(name: [.short, .long], help: ArgumentHelp(
@@ -539,7 +546,7 @@ struct Hark: ParsableCommand {
                 try RemoteControlAgent(defaults: self, address: address).run()
                 return
             }
-            let outputs = try resolveOutputs()
+            let outputs = try guardedOutputs(try resolveOutputs(), settings: settings)
             if let input {
                 try runFileInput(input, outputs: outputs, settings: settings)
             } else {
@@ -571,8 +578,22 @@ struct Hark: ParsableCommand {
     func executeLive(control: CaptureControl) throws {
         let settings = try ResolvedSettings.resolve(from: self)
         try settings.validate()
-        let outputs = try resolveOutputs()
+        let outputs = try guardedOutputs(try resolveOutputs(), settings: settings)
         try runLiveInput(outputs: outputs, settings: settings, externalControl: control)
+    }
+
+    /// Pre-resolves output collisions for a remote session (PRD §6.10) so
+    /// `POST /start`/`GET /status` can report the paths that will actually be
+    /// written. Returns a copy whose `-a`/`-t` are free, with the policy pinned
+    /// to `error` (the re-check inside `executeLive` is then a no-op).
+    func reservingOutputs() throws -> Hark {
+        var reserved = self
+        let settings = try ResolvedSettings.resolve(from: self)
+        let outputs = try guardedOutputs(try resolveOutputs(), settings: settings)
+        if case .file(let path)? = outputs.audio { reserved.audio = path }
+        if case .file(let path)? = outputs.transcript { reserved.transcript = path }
+        reserved.ifExists = .error
+        return reserved
     }
 
     // MARK: Output resolution
@@ -615,6 +636,19 @@ struct Hark: ParsableCommand {
             transcriptDest = nil
         }
         return ResolvedOutputs(audio: audioDest, transcript: transcriptDest)
+    }
+
+    /// Protects files that already exist (PRD §6.1). Runs before capture, TCC
+    /// prompts, and model loading: the whole invocation's outputs are treated as
+    /// one artifact set, so a single decision covers them and `unique` keeps an
+    /// audio/transcript pair aligned (`rec-1.m4a` + `rec-1.txt`).
+    func guardedOutputs(
+        _ outputs: ResolvedOutputs, settings: ResolvedSettings,
+        prompt: CollisionPrompt = TerminalCollisionPrompt()
+    ) throws -> ResolvedOutputs {
+        try OutputGuard.checkDistinct(input: input, outputs: outputs)
+        return try OutputGuard.prepare(
+            outputs, split: parsedSplit(), policy: settings.ifExists, prompt: prompt)
     }
 
     // MARK: Live capture

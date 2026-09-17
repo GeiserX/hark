@@ -54,8 +54,7 @@ public final class MP3FileWriter: @unchecked Sendable {
         }
         self.gfp = gfp
 
-        FileManager.default.createFile(atPath: url.path, contents: nil)
-        guard let handle = FileHandle(forWritingAtPath: url.path) else {
+        guard let handle = OutputFile.truncatingHandle(at: url) else {
             lame_close(gfp)
             self.gfp = nil
             throw WriterError.cannotCreateFile(url.path)

@@ -93,6 +93,47 @@ for text on stdout.
 With
 .BR "\-a \-" ,
 stream headerless raw PCM to stdout instead of a WAV container.
+.TP
+.BI \-\-if\-exists " ask|error|overwrite|unique"
+What to do when a file this run would write already exists. Checked before
+capture starts, so nothing is destroyed and no recording is lost to a late
+failure.
+.RS
+.TP
+.B ask
+(default) Ask on the terminal:
+.BR [o]verwrite ,
+.B [u]nique
+or
+.BR [c]ancel .
+Without a terminal (cron, pipes, the remote agent) this behaves like
+.BR error .
+.TP
+.B error
+Refuse to write and exit 73.
+.TP
+.B overwrite
+Replace the existing files; for
+.BR \-\-split ,
+stale
+.IR NAME _ NNN
+chunks of a previous run are removed first.
+.TP
+.B unique
+Write to the next free numbered name
+.RB ( rec.m4a " \[->] " rec\-1.m4a ).
+.RE
+.IP
+Every output of the invocation is treated as one set: a single decision covers
+all of them and
+.B unique
+picks one suffix that is free for each, so an audio/transcript pair keeps
+matching names. Outputs on stdout are never affected. Also
+.B $HARK_IF_EXISTS
+or config
+.BR if\-exists .
+To append transcripts, use the shell:
+.BR "hark \-t \- >> notes.txt" .
 .SH CAPTURE OPTIONS
 .TP
 .BI \-r ", " \-\-rate " HZ"
@@ -388,6 +429,10 @@ Default input device UID.
 .B HARK_DIRECTORY
 Default working directory for relative artifact paths.
 .TP
+.B HARK_IF_EXISTS
+Default policy for existing output files
+.RB ( ask / error / overwrite / unique ).
+.TP
 .B HARK_CAPTURE
 Default system/app capture backend
 .RB ( auto / sckit / coreaudio ).
@@ -453,6 +498,11 @@ Feature or engine unavailable / not implemented.
 .TP
 .B 70
 Internal error.
+.TP
+.B 73
+Refused to write an output file that already exists (see
+.BR \-\-if\-exists ),
+or cancelled at the prompt.
 .TP
 .B 74
 I/O error.

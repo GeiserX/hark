@@ -60,6 +60,17 @@ mp3="$base.mp3"
 txt="$base.txt"
 md="$base.md"
 
+# A second meeting on the same day would land on the same name. Pick the next
+# free one here (rather than leaving it to hark's --if-exists, which would
+# rename the files behind our back and break the summary step below), matching
+# hark's own "-N" numbering.
+if [[ -e "$mp3" || -e "$txt" || -e "$md" ]]; then
+  n=1
+  while [[ -e "$base-$n.mp3" || -e "$base-$n.txt" || -e "$base-$n.md" ]]; do n=$((n + 1)); done
+  base="$base-$n"
+  mp3="$base.mp3"; txt="$base.txt"; md="$base.md"
+fi
+
 print -u2 -- "hark-meeting: recording → $mp3 (Enter to finish, space to pause, m to mute, y to yank)"
 
 # Hark's interactive UI puts the terminal in cbreak mode. It restores it on the
@@ -72,7 +83,7 @@ tty_state=""
 # Don't let a signal-based exit (Ctrl-C => 130) abort the script before we
 # summarize; decide based on whether a transcript was actually produced.
 set +e
-hark --interactive --system --mix --speakers -a "$mp3" -t "$txt"
+hark --interactive --system --mix --speakers --if-exists error -a "$mp3" -t "$txt"
 rc=$?
 set -e
 

@@ -448,6 +448,26 @@
 - [x] Docs: permissions.md background-service section; remote-control.md service section rewrite; PRD §4.2/§6.10/US11 + Open Q4 resolved; CHANGELOG
 - [ ] Post-release verification: `brew upgrade hark` → grants survive the Cellar path change? (path-recorded TCC entries) — document the outcome; auto-start after logout/login
 
+## Phase 12: Existing-output protection (PRD Feature 26 / §6.1)
+
+> Bug: `-a`/`-t`/`--split` outputs were truncated/replaced with no warning, so a
+> re-run silently destroyed a previous recording or transcript. Fixed with one
+> pre-flight policy, resolved through the usual flag › env › config chain.
+> Deliberately **no `append` mode**: it's impossible for m4a/flac/opus and only
+> partly meaningful for wav/mp3 and `.srt`, and the shell already appends text
+> (`hark -t - >> notes.txt`) — a per-format exception table would have made the
+> audio and transcript experience inconsistent.
+
+- [x] `OutputGuard` (`ExistingFilePolicy` = `ask|error|overwrite|unique`, `CollisionPrompt` + `TerminalCollisionPrompt`): pre-flight over the whole **artifact set** (audio file or `--split` chunk set + transcript), one decision for all outputs, joint `-N` suffix so a pair stays aligned (`rec-1.m4a` + `rec-1.txt`); `overwrite` purges a previous run's stale `NAME_###` chunks; stdout/`--no-output` exempt
+- [x] `ask` prompts on stderr / reads stdin only when both are TTYs (re-asks on a bad answer, EOF ⇒ cancel), else degrades to `error`; new exit code **73** (`EX_CANTCREAT`) for refusal and cancel
+- [x] `--if-exists` flag + `if-exists` config key + `$HARK_IF_EXISTS` (registry/`Configuration`/`ResolvedSettings`/tests five-place sync); wired in `run()` and `executeLive()` before TCC prompts and model loads
+- [x] Adjacent guards: input-as-output (`-i rec.wav -a rec.wav`, previously truncated the file being read), `-a` == `-t`, and an output path that is a directory
+- [x] Remote agent: `StartRequest.ifExists` (default `unique`, `ask` rejected, launch flag inherited when non-interactive); collisions resolved in `POST /start` **before** `sessions.begin`, so the response and `GET /status` carry the final paths; `cantCreate` → `409`
+- [x] Fixed a latent truncation bug in the WAV/MP3/Opus/live-transcript writers: `FileManager.createFile` + `FileHandle` doesn't truncate, so a failed create wrote new audio over stale trailing bytes — now a single `open(2)` with `O_CREAT|O_TRUNC` (`Encoders.OutputFile`)
+- [x] Tests: `OutputGuardTests` (policy matrix on real files, joint/first-free numbering, single prompt, non-TTY ⇒ error, cancel, chunk detection/purge, directory + self-overwrite guards, env/config precedence), agent defaults + reserved paths, exit-code mapping — 319 tests, 78 suites green
+- [x] Docs: README (Existing output files + config example), `docs/reference.md` (output table, mode table, config row, exit 73), man (`--if-exists`, `HARK_IF_EXISTS`, exit 73; mandoc clean), `docs/remote-control.md` (`ifExists`), PRD Feature 26 + §6.1, CHANGELOG (behaviour change + escape hatch); `examples/hark-meeting` picks its own free `-N` name, `hark-note` uses `--if-exists error`
+- [x] Verified with the binary: all four modes on a real collision, the prompt on a pty (o/u/c + bad answer), joint pair numbering, chunk-set purge on a live `--split` run, `$HARK_IF_EXISTS`, `hark config show/set/unset if-exists`, `hark --help`
+
 ## Phase 11: Legal & Export-Compliance Docs (PRD §7 Legal & Compliance)
 
 > Docs-only hygiene prompted by an external "assess it from the legal

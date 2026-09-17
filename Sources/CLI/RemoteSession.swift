@@ -130,6 +130,10 @@ final class RemoteSessionManager: @unchecked Sendable {
 struct StartRequest: Decodable {
     var audio: String?
     var transcript: String?
+    /// Existing-output policy for this session: `error`, `overwrite`, or
+    /// `unique`. Defaults to `unique` (auto-numbered) so a session never blocks
+    /// and never clobbers; `ask` is rejected — the agent has no terminal.
+    var ifExists: String?
     /// Begin with the microphone muted (requires a mic in the capture, else 422).
     /// Not a CLI flag — handled by the agent, not `makeCommand`.
     var muted: Bool?
@@ -176,6 +180,7 @@ struct StartRequest: Decodable {
 
         if let audio { cmd.audio = audio }
         if let transcript { cmd.transcript = transcript }
+        cmd.ifExists = try resolvedPolicy(defaults: defaults)
         if let system { cmd.captureSystem = system }
         if let apps { cmd.apps = apps }
         if let excludeApps { cmd.excludeApps = excludeApps }
@@ -235,5 +240,24 @@ struct StartRequest: Decodable {
             throw HarkError.usage("\(error)")
         }
         return cmd
+    }
+
+    /// The existing-output policy for this session. An explicit request value
+    /// wins, else the agent's launch flag, else `unique`. `ask` can never apply
+    /// (nothing would answer the prompt), so it becomes `unique`.
+    private func resolvedPolicy(defaults: Hark) throws -> ExistingFilePolicy {
+        if let raw = ifExists {
+            guard let parsed = ExistingFilePolicy(rawValue: raw.lowercased()) else {
+                throw HarkError.usage(
+                    "invalid ifExists '\(raw)' (error, overwrite, unique).")
+            }
+            guard parsed != .ask else {
+                throw HarkError.usage(
+                    "ifExists 'ask' needs a terminal; use error, overwrite, or unique.")
+            }
+            return parsed
+        }
+        if let launch = defaults.ifExists, launch != .ask { return launch }
+        return .unique
     }
 }
