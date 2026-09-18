@@ -6,6 +6,43 @@ All notable changes to Hark are documented here. The format is loosely based on
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-17
+
+### Fixed
+- A capture that can't reach the audio stream — most often a missing or stale
+  "System Audio Recording" grant — could block forever in the Core Audio
+  teardown, taking the whole recording with it. Stopping is now bounded
+  (`$HARK_TEARDOWN_TIMEOUT`, default 5 s): hark reports the problem and
+  finalizes the outputs anyway, so the audio captured so far stays playable.
+  Late chunks arriving from the audio thread during teardown are dropped instead
+  of racing the sinks being finalized.
+- The remote-control agent handled such a capture badly: because captures share
+  one serial queue and `POST /stop` marks the session `stopped` optimistically,
+  the next `POST /start` returned `201` and then never recorded, while
+  `GET /status` still showed `stopped` with `error: null` — the agent looked
+  healthy but was dead. Now a stop that doesn't complete within
+  `$HARK_STOP_TIMEOUT` (default 10 s) marks the session `failed` with an
+  explanatory error, and a `POST /start` behind a stuck worker is refused with
+  `409` instead of being silently accepted. Agent shutdown notes a
+  still-finishing capture in the service log.
+
+### Documentation
+- PRD §6.1 documented `--speakers[=auto|source|acoustic]`, which the binary
+  rejects; it now describes the shipped `--speakers` + `--speaker-mode` pair (the
+  example too). Feature 11 is marked WAV-only with MP4/ID3 deferred, Feature 14
+  gains the shipped `parakeet` engine, and a new §9 milestone row covers the
+  output-protection and reliability work.
+- PRD §5 acceptance criteria are ticked where a test, verification script, or
+  recorded live run demonstrates the behaviour (28 of 64), with a header
+  defining what a checked box means; the rest stay open as TCC/GUI/soak-gated or
+  not-yet-built.
+- PLAN: the legal-docs phase is closed (it shipped in 0.4.0), stale placeholders
+  resolved, and new phases added for this fix and for the unbuilt PRD M9
+  (interactive shortcuts + combined agent).
+- man page gains a `RESPONSIBLE USE` section plus `HARK_TEARDOWN_TIMEOUT` and
+  `HARK_STOP_TIMEOUT`; `docs/reference.md` documents bounded teardown;
+  `docs/remote-control.md` documents wedged-capture semantics.
+
 ## [0.4.2] - 2026-09-16
 
 ### Added
@@ -104,6 +141,12 @@ All notable changes to Hark are documented here. The format is loosely based on
 ## [0.4.0] - 2026-07-22
 
 ### Added
+- `docs/legal.md`: export classification (ancillary-cryptography exclusion and
+  the publicly-available open-source carve-out → EAR99 self-classification),
+  encryption import/registration regimes, why TCC-gated overt capture is not
+  interception/intrusion software, and responsible-use / recording-consent
+  notes. Linked from a new README "Legal & responsible use" section. (Shipped in
+  this release; the entry was missed at the time.)
 - Remote-control mic mute parity: the agent now exposes `POST /mute` and
   `POST /unmute` (idempotent; silence only the mic, timeline preserved — distinct
   from `/pause`), `GET /status` reports a `muted` field, and `POST /start` accepts
