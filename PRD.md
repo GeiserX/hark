@@ -56,9 +56,9 @@ Beyond batch and pipe usage, Hark can run **interactively** — a minimal termin
 | 9 | Transcription integration | P1 | Transcription is built into the root verb: any input (live capture or `-i` file/stream) can be transcribed by a local engine (e.g., `whisper.cpp`) via `-t/--transcript`. Audio and transcript can be produced in the same run (`-a rec.m4a -t notes.srt`); naming no output transcribes to stdout. |
 | 12 | Live transcription | P1 | During live capture, emit the transcript incrementally — as close to runtime as possible — by segmenting the stream on natural pauses and transcribing each segment as it completes (true streaming is post-MVP). |
 | 13 | Multi-language & translation | P1 | Transcribe ~99 languages with a multilingual model via `--language CODE` or auto-detect (`--language auto`, default); `--translate` emits English from any spoken language (engines that support it). `hark models list/download` manages local models. |
-| 14 | Pluggable transcription engines | P2 | Select the engine with `--engine`: `whisper` (whisper.cpp, default), `apple` (native Speech.framework, no extra deps), `whisperkit` (CoreML, on-device, multilingual + translate). Capabilities (auto-detect, translate, model semantics) vary and are validated. |
+| 14 | Pluggable transcription engines | P2 | Select the engine with `--engine`: `whisper` (whisper.cpp, default), `apple` (native Speech.framework, no extra deps), `whisperkit` (CoreML, on-device, multilingual + translate), `parakeet` (FluidAudio CoreML, 25 European languages / English v2). Capabilities (auto-detect, translate, model semantics) vary and are validated; `cloud` stays Post-MVP. |
 | 10 | Silence-based splitting | P2 | Split on continuous silence exceeding a configurable threshold (`--split silence=SEC`). |
-| 11 | Basic metadata embedding | P2 | Store recording start time, source name, and sample rate in WAV INFO, MP4, or ID3 tags. |
+| 11 | Basic metadata embedding | P2 | Store recording start time, source name, and software tag in WAV `LIST/INFO` (`ICRD`/`INAM`/`ISFT`). **Shipped for WAV only**; MP4 atoms (m4a) and ID3v2 (mp3) are deferred to Post-MVP (§4.2) — the OS encoders give no metadata hook, so each needs its own container writer. |
 | 15 | Speaker attribution by source (You vs Others) | P1 | When two sources are captured (`--mix`, or `--system`/`--app` + mic), keep the microphone and system audio as separate **internal** tracks and tag each transcript segment with its source ("You" = mic, "Others" = system). Deterministic and exact — no ML, no model download. This replaces the unreliable single-mixed-stream heuristic. |
 | 16 | Acoustic speaker diarization | P1 | Separate anonymous speakers ("Speaker 1/2…") within a single stream using FluidAudio CoreML models (on-device, Apple Neural Engine). Offline mode (batch `-i`, most accurate) and streaming mode (live capture). |
 | 17 | VAD-based live segmentation | P1 | Replace amplitude/silence-threshold segment cutting with Silero VAD (FluidAudio) for stable speech/pause boundaries at runtime; graceful fallback to the existing amplitude method when VAD models are unavailable. Feeds both transcription and the speaker pipeline. |
@@ -84,7 +84,8 @@ Beyond batch and pipe usage, Hark can run **interactively** — a minimal termin
 - **Multi-channel mapping** (e.g., separate tracks for mic and system audio).
 - **Plugin system** to inject custom DSP filters (EQ, noise suppression) as middleware.
 - **Configuration profiles** to store default sources, formats, and transcription settings.
-- **Additional engines**: NVIDIA Parakeet (via FluidAudio CoreML); cloud backends (Deepgram, Google) selectable via `--engine`.
+- **Additional engines**: cloud backends (Deepgram, Google) selectable via `--engine cloud`. (NVIDIA Parakeet via FluidAudio CoreML shipped in M6 — see Feature 14.)
+- **Metadata for encoded formats**: MP4 atoms (m4a) and ID3v2 (mp3), completing Feature 11 beyond WAV.
 - **Named speaker identification**: voiceprint enrollment and a local speaker store, so diarized speakers resolve to named people across recordings (FluidAudio speaker embeddings).
 - **Overlapping-speech handling**: per-word speaker assignment and crosstalk resolution when two speakers talk simultaneously.
 
@@ -92,55 +93,62 @@ Beyond batch and pipe usage, Hark can run **interactively** — a minimal termin
 
 ## 5. User Stories
 
+> A criterion is checked when the behaviour it describes has been demonstrated —
+> by an automated test, a verification script, or a live run recorded in
+> [PLAN.md](PLAN.md). Unchecked ones are either not built yet (US13/US14) or
+> need something CI and a headless agent can't provide: a real TCC-granted
+> capture, a browser, cron/launchd, a soak run, or listening QA. See PLAN's
+> "Pending live verification" list.
+
 ### US01 — Quick voice notes
 As a **developer**, I want to quickly capture my microphone input for five minutes and save it to a file, so that I can review my spoken notes later without opening Audacity.
 - Acceptance Criteria:
-  - [ ] `hark -a notes.m4a --duration 300` records from the default input device without specifying a device UID (and writes no transcript, since only `-a` is named)
-  - [ ] Recording stops automatically after 300 seconds with exit code 0
+  - [x] `hark -a notes.m4a --duration 300` records from the default input device without specifying a device UID (and writes no transcript, since only `-a` is named)
+  - [x] Recording stops automatically after 300 seconds with exit code 0
   - [ ] Resulting file plays correctly in QuickTime/`afplay` and duration is 300 s ± 1 s
 
 ### US02 — Record a meeting without echo
 As a **developer**, I want to record the audio from an ongoing Zoom call without echoing my own voice, so that I can later transcribe the meeting and extract action items.
 - Acceptance Criteria:
   - [ ] `hark apps` lists the running Zoom process with its bundle ID
-  - [ ] `hark --app us.zoom.xos -a call.m4a` captures only Zoom's output audio
-  - [ ] The user's own microphone is not captured unless `--mix` is explicitly given
-  - [ ] First-run macOS "System Audio Recording" permission prompt and approval flow is documented
+  - [x] `hark --app us.zoom.xos -a call.m4a` captures only Zoom's output audio
+  - [x] The user's own microphone is not captured unless `--mix` is explicitly given
+  - [x] First-run macOS "System Audio Recording" permission prompt and approval flow is documented
 
 ### US03 — Zero-touch transcription pipeline
 As a **data engineer**, I want to capture audio and get a transcript with zero manual steps, so that I can build a fully automated transcription pipeline.
 - Acceptance Criteria:
   - [ ] `hark --duration 60 -t -` captures from the default mic and produces transcript text on stdout in one step
   - [ ] The equivalent pipeline `hark -a - --duration 60 | hark -i -` produces the same transcript text on stdout
-  - [ ] A failure in the transcription engine propagates a non-zero exit code through the pipeline
+  - [x] A failure in the transcription engine propagates a non-zero exit code through the pipeline
 
 ### US04 — Manageable chunks
 As a **power user**, I want to split a long recording into chunks based on silence, so that I can easily manage large audio files and focus on important segments.
 - Acceptance Criteria:
   - [ ] `hark --split silence=1.5 -a name.wav` produces sequentially numbered files (`name_001.wav`, `name_002.wav`, …)
   - [ ] Each chunk is independently playable with a valid, finalised header
-  - [ ] The silence detection threshold (dBFS) is configurable
+  - [x] The silence detection threshold (dBFS) is configurable
 
 ### US05 — Unattended compliance recording
 As a **sysadmin**, I want to install the tool via Homebrew and have it run in a crontab, so that I can automatically record every team stand-up for compliance.
 - Acceptance Criteria:
-  - [ ] `brew install hark` installs a working, signed binary
+  - [x] `brew install hark` installs a working, signed binary
   - [ ] Once the TCC permission is granted, recording runs unattended from cron/launchd without GUI interaction
-  - [ ] Exit codes and stderr logging are suitable for cron-based monitoring and alerting
+  - [x] Exit codes and stderr logging are suitable for cron-based monitoring and alerting
 
 ### US06 — Script-parseable enumeration
 As an **ML researcher**, I want to list all available audio devices and capturable applications in a script-parseable format, so that I can write robust automation that adapts to different machine setups.
 - Acceptance Criteria:
-  - [ ] `hark devices --json` outputs valid JSON with UID, name, channel count, and sample rates
-  - [ ] `hark apps --json` outputs valid JSON with name, bundle ID, and PID
-  - [ ] Commands exit 0 with an empty array when nothing is found
+  - [x] `hark devices --json` outputs valid JSON with UID, name, channel count, and sample rates
+  - [x] `hark apps --json` outputs valid JSON with name, bundle ID, and PID
+  - [x] Commands exit 0 with an empty array when nothing is found
 
 ### US07 — Focused app capture
 As a **developer**, I want to capture audio from one specific app while excluding others, so that my recording contains no notification sounds or unrelated audio.
 - Acceptance Criteria:
-  - [ ] `--app` is repeatable to include multiple applications in one capture
-  - [ ] `--exclude-app` captures all system audio except the listed applications
-  - [ ] Notification sounds from excluded apps are absent from the resulting recording
+  - [x] `--app` is repeatable to include multiple applications in one capture
+  - [x] `--exclude-app` captures all system audio except the listed applications
+  - [x] Notification sounds from excluded apps are absent from the resulting recording
 
 ### US08 — Know who said what
 As a **developer**, I want my meeting transcript to label who said each line — me versus the call, and distinct remote speakers — so that I can produce accurate minutes and attribute action items.
@@ -148,7 +156,7 @@ As a **developer**, I want my meeting transcript to label who said each line —
   - [ ] `hark --system --mix --speakers -t mtg.srt` tags each cue with a speaker label (e.g. `You`, `Speaker 1`)
   - [ ] Lines spoken into my microphone are labeled distinctly from the call audio (deterministic source attribution, not a guess)
   - [ ] `hark --system --mix --speakers -t mtg.json` includes a `speaker` field on every segment
-  - [ ] Diarization runs fully on-device; the first run may download CoreML models, after which it is offline
+  - [x] Diarization runs fully on-device; the first run may download CoreML models, after which it is offline
   - [ ] During live capture, speaker labels appear close to runtime (streaming), not only after the call ends
 
 ### US09 — Interactive recording with a break
@@ -158,34 +166,34 @@ As a **developer**, I want to record interactively and pause during a break, so 
   - [ ] `hark --interactive -a notes.m4a -t notes.txt` shows the live transcript on screen **while** concurrently writing `notes.m4a` and `notes.txt`
   - [ ] Pressing **space** pauses; the paused interval is absent from both `notes.m4a` and the transcript (a true gap), and **space** again resumes
   - [ ] Pressing **Enter** (or Ctrl-C) stops and finalises the file so it remains playable (same guarantee as Ctrl+C)
-  - [ ] When stdout is not a TTY (or `-a -`/`-t -` is requested), `--interactive` exits with a clear usage error; the terminal is restored on exit and on SIGINT/SIGTERM
+  - [x] When stdout is not a TTY (or `-a -`/`-t -` is requested), `--interactive` exits with a clear usage error; the terminal is restored on exit and on SIGINT/SIGTERM
 
 ### US10 — Know what's running before I speak
 As a **power user**, I want Hark to tell me which engine, model, and source it's using when a capture starts, so that I can catch a misconfiguration before recording a whole meeting.
 - Acceptance Criteria:
-  - [ ] Starting a live capture in a terminal prints a status block to stderr (engine, model, language, source/device, capture backend, format, outputs, speaker mode, VAD, duration)
-  - [ ] The status block is suppressed when stderr is redirected/piped, and always shown with `-v`
-  - [ ] The status block is never written to stdout (it does not corrupt `-a -`/`-t -` streams)
+  - [x] Starting a live capture in a terminal prints a status block to stderr (engine, model, language, source/device, capture backend, format, outputs, speaker mode, VAD, duration)
+  - [x] The status block is suppressed when stderr is redirected/piped, and always shown with `-v`
+  - [x] The status block is never written to stdout (it does not corrupt `-a -`/`-t -` streams)
 
 ### US11 — Browser-driven meeting capture
 As a **knowledge worker**, I want my browser to start and stop Hark automatically around Google Meet calls, so that every meeting is recorded and named without my intervention.
 - Acceptance Criteria:
-  - [ ] `hark --remote-control` starts an agent listening on loopback and prints its address; it does not begin capturing on its own
+  - [x] `hark --remote-control` starts an agent listening on loopback and prints its address; it does not begin capturing on its own
   - [ ] A Tampermonkey userscript (shipped as a reference at `examples/hark-meet.user.js`) calls `POST /start` when a Meet call is joined, with a filename derived from the meeting title and date, and `POST /stop` when the call ends
-  - [ ] The recording is written under the agent's working `directory`; `GET /status` reports the session's state, elapsed time, and output paths (the API never serves the transcript/audio content itself)
-  - [ ] A second `POST /start` while a recording is active is rejected with `409 Conflict` (single active session)
-  - [ ] With a non-loopback bind address, the agent refuses to start unless a token (`$HARK_REMOTE_TOKEN`) is configured, and rejects unauthenticated requests
-  - [ ] `brew services start hark` runs the agent as a login LaunchAgent on the configured `remote-control-port` (default 8473); it is reachable by the userscript after login without a manual terminal start (macOS 26: the first mid-session start needs one `launchctl kickstart` — formula caveats say so; validated live: capture, transcription, and mute work under the launchd agent once TCC grants are in place)
+  - [x] The recording is written under the agent's working `directory`; `GET /status` reports the session's state, elapsed time, and output paths (the API never serves the transcript/audio content itself)
+  - [x] A second `POST /start` while a recording is active is rejected with `409 Conflict` (single active session)
+  - [x] With a non-loopback bind address, the agent refuses to start unless a token (`$HARK_REMOTE_TOKEN`) is configured, and rejects unauthenticated requests
+  - [x] `brew services start hark` runs the agent as a login LaunchAgent on the configured `remote-control-port` (default 8473); it is reachable by the userscript after login without a manual terminal start (macOS 26: the first mid-session start needs one `launchctl kickstart` — formula caveats say so; validated live: capture, transcription, and mute work under the launchd agent once TCC grants are in place)
 
 ### US12 — Mute and grab the transcript on the fly
 As a **developer in a live meeting**, I want to mute my mic and copy the running transcript without stopping the recording, so that I can have a side conversation and paste notes elsewhere mid-call.
 - Acceptance Criteria:
   - [ ] In `hark --interactive --mix -a mtg.m4a`, pressing **m** mutes only the microphone — the system/call audio keeps recording — and **m** again unmutes; the recording timeline has no gap
   - [ ] In a mic-only `hark --interactive`, pressing **m** records silence for the muted interval (output length still matches wall-clock), distinct from **space** pause which omits the interval
-  - [ ] When the capture has no microphone (e.g. `--system` without `--mix`), the **m** control is hidden; pressing **m** prints a brief notice and does nothing
+  - [x] When the capture has no microphone (e.g. `--system` without `--mix`), the **m** control is hidden; pressing **m** prints a brief notice and does nothing
   - [ ] Pressing **y** copies the full transcript captured so far to the system clipboard (plain text, with speaker labels when `--speakers` is active) and prints a confirmation on stderr
-  - [ ] Pressing **y** before anything is transcribed shows a brief "nothing to copy" notice and leaves the clipboard unchanged
-  - [ ] Over the remote-control API (§6.10), `POST /mute`/`/unmute` toggle the active session's mic the same way (timeline preserved, idempotent), `GET /status` reports the `muted` flag, and a capture with no microphone returns `422`; transcript yank is interactive-only (the API never serves transcript content)
+  - [x] Pressing **y** before anything is transcribed shows a brief "nothing to copy" notice and leaves the clipboard unchanged
+  - [x] Over the remote-control API (§6.10), `POST /mute`/`/unmute` toggle the active session's mic the same way (timeline preserved, idempotent), `GET /status` reports the `muted` flag, and a capture with no microphone returns `422`; transcript yank is interactive-only (the API never serves transcript content)
   - [ ] The reference Google Meet userscript (§6.10) mirrors the Meet mic toggle to the agent **one-way** (Meet → hark): it starts the recording with `muted` matching Meet's state at join, then `POST /mute`/`/unmute` as you toggle in Meet (only when the capture has a mic); hark never drives Meet's mic
 
 ### US13 — Mid-meeting AI recap
@@ -264,7 +272,8 @@ hark models | config                    # model + default management
 - `--raw` : with `-a -`, stream headerless raw PCM to stdout instead of a WAV container.
 
 **Speaker recognition (diarization) — see §6.7:**
-- `--speakers[=auto|source|acoustic]` (alias `--diarize`) : label transcript segments by speaker. `auto` (the value when the flag is given bare) attributes the microphone side by source ("You") and diarizes the system/single stream acoustically ("Speaker 1/2…"); `source` labels by capture source only (needs two sources); `acoustic` runs acoustic diarization only. Off by default.
+- `--speakers` / `--no-speakers` (alias `--diarize`) : label transcript segments by speaker. Off by default; also `$HARK_SPEAKERS` / config `speakers`.
+- `--speaker-mode auto|source|acoustic` : how labels are assigned (default `auto`). `auto` attributes the microphone side by source ("You") and diarizes the system/single stream acoustically ("Speaker 1/2…"); `source` labels by capture source only (needs two sources); `acoustic` runs acoustic diarization only. Requires `--speakers`; also `$HARK_SPEAKER_MODE` / config `speaker-mode`. (A mode-valued `--speakers[=mode]` was considered, but ArgumentParser has no optional-value options, so the mode is its own flag.)
 - `--max-speakers N` : cap/hint for the **offline/batch** acoustic-clustering diarizer (bounded by the diarizer model's capacity; no effect on the streaming EEND diarizer; see §6.7).
 - `--speaker-threshold 0..1` : **offline/batch** clustering sensitivity (default ~0.65; lower splits speakers more readily, higher merges them). No effect on the streaming EEND diarizer.
 - `--diarize-engine auto|streaming|offline` : pick the diarizer (default `auto` → streaming **(LS-EEND)** for live capture, offline for `-i` files).
@@ -286,7 +295,7 @@ hark -a - | ffmpeg -i - ...                 # stream WAV into a pipe
 hark -i talk.mp3 --language auto -t talk.srt        # detect language -> subtitles
 hark --system --engine whisperkit --translate -t -  # any language -> English, live
 hark --system --mix --speakers -t mtg.srt           # meeting w/ speaker labels (You / Speaker N)
-hark -i mtg.wav --speakers=acoustic -t mtg.json     # diarize a recording -> labeled JSON
+hark -i mtg.wav --speakers --speaker-mode acoustic -t mtg.json  # diarize a recording -> labeled JSON
 hark --interactive --system --mix -a mtg.m4a        # interactive meeting capture (pause/stop)
 hark config set shortcut.w 'fabric-ai -p summarize_meeting "$HARK_TRANSCRIPT" | pbcopy'
 hark --interactive --system --mix                   # then press w to recap mid-meeting
@@ -522,7 +531,8 @@ Speaker labeling answers "who said what." It is **opt-in** via `--speakers`/`--d
 | **M7 – Speaker Recognition & Runtime Segmentation** | Source attribution (You/Others) via internal multi-track capture; acoustic diarization (FluidAudio, offline + streaming); VAD-based live segmentation; `--speakers`/`--diarize` flags; speaker labels in txt/srt/json; diarization/VAD models in `hark models` | Post-M6 | M4, M6 |
 | **M8 – Status, Interactive & Remote Control** | Startup status summary (§6.8); `--interactive` minimal UI with pause(gap)/resume, mic mute/unmute, transcript yank-to-clipboard, stop (§6.9); `--remote-control` HTTP/JSON agent (§6.10) with start/stop/pause/resume/status, loopback default + token for non-loopback; working-directory path resolution for outputs; documented protocol + Tampermonkey Google-Meet reference userscript | Post-M7 | M4, Feature 20 (working directory) |
 | **M9 – Interactive shortcuts & combined agent** | User-defined `--interactive` keys via scalar `shortcut.<k>` config; snapshot live captions to a temp file; `$HARK_TRANSCRIPT`; detached `/bin/sh -c`; reserved-key rejection (Feature 24, US13, §6.9). Combined `--interactive --remote-control`: long-lived TUI agent, capture on `POST /start`, Enter stops session / Ctrl-C quits, caption log kept until next start (Feature 25, US14) | Post-M8 | M8 |
-| **Post-MVP** | Scheduled/unattended launchd daemon, cross-host/authenticated remote control, streaming transcription, cloud backends, configuration profiles, named speaker identification (voiceprints), overlapping-speech handling | Ongoing | M5, M8 |
+| **M8.1 – Output safety & agent reliability** | Existing-output protection: `--if-exists ask\|error\|overwrite\|unique` over the whole artifact set, exit 73, agent default `unique` (Feature 26, §6.1). Agent stop-timeout watchdog + bounded capture teardown so an unreachable audio stream can't hang the process or silently wedge the agent | Post-M8 | M8 |
+| **Post-MVP** | Scheduled/unattended launchd daemon, cross-host/authenticated remote control, streaming transcription, cloud backends, configuration profiles, named speaker identification (voiceprints), overlapping-speech handling, MP4/ID3 metadata | Ongoing | M5, M8 |
 
 ---
 

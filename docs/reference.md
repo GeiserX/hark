@@ -74,6 +74,12 @@ change — the stream is restarted and recording resumes (tunable via
 `$HARK_STALL_SECONDS`, `$HARK_RECOVER_TIMEOUT`; disable with `$HARK_NO_RECOVER`).
 Pair with `--keep-awake` to avoid idle sleep entirely.
 
+Stopping is also bounded: if the audio stream can't be torn down (most often a
+missing or stale **System Audio Recording** grant, which has been seen to block
+the Core Audio teardown indefinitely), hark reports it and finalizes the
+recording anyway so the audio captured so far stays playable — after
+`$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely).
+
 ## Working directory
 
 `-C, --directory PATH` resolves **relative** artifact paths (`-i`, `-a`, `-t`,

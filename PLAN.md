@@ -6,7 +6,7 @@
 
 > Unscheduled items. Add new work here; `/plan` will triage on next run.
 
-- [ ] Bug: a permission-less system capture can hang the worker instead of finishing — observed live (macOS 26, agent, `auto`→coreaudio fallback after a TCC grant went stale post-upgrade): zero bytes delivered, `POST /stop` marked the session `stopped` optimistically but `executeLive` never returned, so no all-silence warning was logged and `session.error` stayed empty (a stuck thread leaks per occurrence; also seen as a foreground `--capture-backend coreaudio` teardown hang). Investigate the Core Audio tap start/teardown path without the AudioCapture grant; consider a stop-timeout watchdog in the agent worker that force-fails the session and surfaces an error in `GET /status`
+> Nothing queued — the permission-less capture hang moved to Phase 12.1.
 
 ## Phase 1: Project Foundation & Core Capture (PRD M1)
 
@@ -208,11 +208,11 @@
 
 ### Phase 8.0 — Spec & docs (in progress; scope still being refined)
 
-- [ ] PRD §6.7 + supporting edits drafted (FR rows 15–19, §4.2, US08, §6.1 flags, §6.6 VAD note, §7, §8, §9 M7, §10 Open Qs) — **under active review, not finalized**
+- [x] PRD §6.7 + supporting edits (FR rows 15–19, §4.2, US08, §6.1 flags, §6.6 VAD note, §7, §8, §9 M7, §10 Open Qs) — finalized in Phase 12.1's docs pass
 - [x] PRD §6.7/§7 reconciled to the implemented VAD behavior (default-on on Apple Silicon, Silero model fetched on first live run, opt-out `HARK_VAD=0`, amplitude fallback)
-- [ ] PRD §6.1 reconciliation: `--speakers` flag + `--speaker-mode` (vs the drafted `--speakers[=mode]`)
-- [ ] docs/permissions.md: diarization/VAD need **no new TCC** (operate on already-captured audio) but fetch FluidAudio CoreML models from Hugging Face on first use
-- [ ] README/man deferred to 8.7 (kept with the feature's other user-facing docs)
+- [x] PRD §6.1 reconciliation: `--speakers` + `--speaker-mode` replace the drafted `--speakers[=mode]` (ArgumentParser has no optional-value options); the §6.1 example was fixed too — it documented syntax the binary rejects
+- [x] docs/permissions.md: diarization/VAD need **no new TCC** (operate on already-captured audio) but fetch FluidAudio CoreML models from Hugging Face on first use
+- [x] README/man deferred to 8.7 (kept with the feature's other user-facing docs) — delivered there
 
 ### Phase 8.1 — VAD-based live segmentation (the runtime fix; no labels yet)
 
@@ -332,7 +332,7 @@
 - [x] PRD §6.8/§6.9/§6.10 + FR rows 21–23, §4.2 reconcile, US09–11, §7 NFR, §8 metrics, §9 M8, §10 Open Qs (Q9 resolved-into-scope, Q10 pause×split)
 - [x] PRD §6.10 revision: replaced the `/recordings/{id}` REST design with **flat single-session control verbs** (`POST /start|/stop|/pause|/resume`, `GET /status`); single active session (parallel `/start` rejected); API is **control + status only** — never serves transcript/audio content (artifacts retrieved from the working `directory`)
 - [x] Add the FlyingFox SwiftPM dep to Package.swift (FlyingFox + FlyingSocks, embedded/static; nothing for users to install); MIT recorded in NOTICES
-- [ ] README/man deferred to 10.4 (kept with the feature's other user-facing docs)
+- [x] README/man deferred to 10.4 (kept with the feature's other user-facing docs) — delivered there
 
 ### Phase 10.1 — Startup status summary (§6.8)
 
@@ -448,6 +448,21 @@
 - [x] Docs: permissions.md background-service section; remote-control.md service section rewrite; PRD §4.2/§6.10/US11 + Open Q4 resolved; CHANGELOG
 - [ ] Post-release verification: `brew upgrade hark` → grants survive the Cellar path change? (path-recorded TCC entries) — document the outcome; auto-start after logout/login
 
+## Phase 11: Legal & Export-Compliance Docs (PRD §7 Legal & Compliance)
+
+> Docs-only hygiene prompted by an external "assess it from the legal
+> standpoint" review (export/import controls, encryption registration). No code,
+> no filings. Self-classification: ancillary crypto only (OS TLS + transitively
+> linked `swift-crypto`), publicly-available open source → EAR99 / not a
+> controlled encryption item; capture is TCC-consent-gated, not interception
+> software. (Informational, not legal advice.)
+
+- [x] PRD: §7 NFR **Legal & Compliance** row + §10 assumption (export/encryption classification deferred TSU notification)
+- [x] `docs/legal.md`: export classification (Note 4 ancillary exclusion + publicly-available open-source carve-out, EAR99 self-class), encryption import/registration regimes (bind in-country importers, not OSS publication), surveillance/interception (TCC-gated, overt, on-device — not intrusion software), responsible-use / recording-consent (user's responsibility; no network by default, no telemetry)
+- [x] README: "Legal & responsible use" section (before License) + link to `docs/legal.md`
+- [x] Light tone pass on surveillance-adjacent phrasing (keep features; frame around consented note-taking)
+- [ ] (Deferred) Optional one-time BIS/NSA **TSU** encryption-notification email — out of scope unless a non-ancillary crypto dep or a commercial/import channel lands (PRD §10 Open Q11)
+
 ## Phase 12: Existing-output protection (PRD Feature 26 / §6.1)
 
 > Bug: `-a`/`-t`/`--split` outputs were truncated/replaced with no warning, so a
@@ -468,20 +483,52 @@
 - [x] Docs: README (Existing output files + config example), `docs/reference.md` (output table, mode table, config row, exit 73), man (`--if-exists`, `HARK_IF_EXISTS`, exit 73; mandoc clean), `docs/remote-control.md` (`ifExists`), PRD Feature 26 + §6.1, CHANGELOG (behaviour change + escape hatch); `examples/hark-meeting` picks its own free `-N` name, `hark-note` uses `--if-exists error`
 - [x] Verified with the binary: all four modes on a real collision, the prompt on a pty (o/u/c + bad answer), joint pair numbering, chunk-set purge on a live `--split` run, `$HARK_IF_EXISTS`, `hark config show/set/unset if-exists`, `hark --help`
 
-## Phase 11: Legal & Export-Compliance Docs (PRD §7 Legal & Compliance)
+## Phase 12.1: Wedged-capture safety net & docs truth-up (0.4.3)
 
-> Docs-only hygiene prompted by an external "assess it from the legal
-> standpoint" review (export/import controls, encryption registration). No code,
-> no filings. Self-classification: ancillary crypto only (OS TLS + transitively
-> linked `swift-crypto`), publicly-available open source → EAR99 / not a
-> controlled encryption item; capture is TCC-consent-gated, not interception
-> software. (Informational, not legal advice.)
+> Fixes the `Incoming` bug: a capture that can't reach the audio stream (observed
+> after a TCC grant went stale post-upgrade) blocked forever in teardown. Audit
+> found it was worse than recorded — captures run on **one serial queue**
+> (`RemoteControlAgent.captureQueue`) and `/stop` marks the session `stopped`
+> optimistically, so `isActive` went false and the *next* `POST /start` returned
+> `201` while its capture queued behind the wedged one: the agent looked healthy,
+> recorded nothing, and `GET /status` showed `stopped` with `error: null`.
+> Plus a docs/plan truth-up, since PRD §6.1 documented `--speakers=mode` syntax
+> the binary rejects.
 
-- [x] PRD: §7 NFR **Legal & Compliance** row + §10 assumption (export/encryption classification deferred TSU notification)
-- [ ] `docs/legal.md`: export classification (Note 4 ancillary exclusion + publicly-available open-source carve-out, EAR99 self-class), encryption import/registration regimes (bind in-country importers, not OSS publication), surveillance/interception (TCC-gated, overt, on-device — not intrusion software), responsible-use / recording-consent (user's responsibility; no network by default, no telemetry)
-- [ ] README: "Legal & responsible use" section (before License) + link to `docs/legal.md`
-- [ ] Light tone pass on surveillance-adjacent phrasing (keep features; frame around consented note-taking)
-- [ ] (Deferred) Optional one-time BIS/NSA **TSU** encryption-notification email — out of scope unless a non-ancillary crypto dep or a commercial/import channel lands (PRD §10 Open Q11)
+- [x] Repro attempt: ran `--system` from an ungranted path and under both backends; the tap delivers zeroed buffers and exits cleanly, so the stale-grant wedge is **not reproducible without a GUI/TCC reset** — implemented against a simulated wedge instead (root cause stays open below)
+- [x] `RemoteSessionManager` tracks **worker liveness** (`workerRunning`) separately from session state; `begin` throws the new `AgentError.finishing` → `409` with a distinct message, so a start can never queue behind a wedged worker and silently record nothing
+- [x] Stop-timeout watchdog: `stop()` arms `$HARK_STOP_TIMEOUT` (default 10 s) via an injectable scheduler; on expiry the session becomes `failed` with an actionable message (wedged stream + the System Audio Recording grant + restart hint) so `GET /status` stops lying. A late `finish` releases the worker slot but keeps the client-visible verdict
+- [x] Bounded capture teardown (`CaptureEngine.runBounded`, `$HARK_TEARDOWN_TIMEOUT`, default 5 s, 0 = old behavior): a `stopping` flag drops late IO chunks, `session.stop()` and the write drain are time-bounded, and the sinks are **finalized anyway** so the audio captured so far stays playable instead of being lost to the hang. Fixes the foreground `--capture-backend coreaudio` symptom too
+- [x] Agent shutdown notes a still-finishing worker in the service log instead of exiting silently
+- [x] Tests: stop-timeout → `failed` (manual scheduler, no sleeps), inert on a clean stop, wedged worker refuses new sessions, late finish keeps the verdict; end-to-end `WedgedStopSession` proving `run()` returns and keeps the audio; `runBounded` semantics — 325 tests, 79 suites green
+- [x] Verified with the binary: mic / coreaudio / sckit / `--mix` captures all still finalize in ~1 s over their duration; with `HARK_STOP_TIMEOUT=0.001` a real agent session flips to `failed` with the message in `/status` and the log, and the slot is released once the worker returns
+- [x] Docs truth-up: PRD §6.1 `--speakers` + `--speaker-mode` (was `--speakers[=mode]`, rejected by the binary) and its example; Feature 11 marked WAV-only with MP4/ID3 deferred to §4.2; Feature 14 gains `parakeet` (dropped from §4.2); new §9 **M8.1** row covering Feature 26 + this phase; §5 acceptance criteria ticked where a test/script/recorded run demonstrates them (28 of 64), with a header defining what checked means
+- [x] PLAN hygiene: Phase 11 ticked (legal docs shipped in v0.4.0), 8.0 permissions/§6.7/§6.1 items resolved, the two "README/man deferred" placeholders closed, Phase 12 moved after Phase 11
+- [ ] Root cause of the HAL teardown wedge (which of `AudioDeviceStop` / `AudioDeviceDestroyIOProcID` / `AudioHardwareDestroyAggregateDevice` / `tap.destroy()` blocks, and whether the ordering can avoid it) — needs a machine/session without the System Audio Recording grant; the timeouts above keep it survivable meanwhile
+
+## Phase 13: Interactive shortcuts & combined agent (PRD M9, §6.9)
+
+> The only spec'd-but-unbuilt PRD features: user-defined `shortcut.<k>` keys
+> (Feature 24, US13) and `--interactive --remote-control` as one long-lived TUI
+> agent (Feature 25, US14). Both are fully specified in PRD §6.9; nothing is
+> implemented yet (`shortcut` appears only in the PRD, and `Hark.validate()`
+> still rejects the flag combination).
+
+### Phase 13.1 — `shortcut.<k>` (Feature 24, US13)
+
+- [ ] Free-form config keys: `shortcut.<k>` storage + `config set/unset/show` support (deliberately outside the typed `ConfigKey` registry — needs a dictionary field on `Configuration` and dynamic-key handling in `ConfigCommand`)
+- [ ] Validation: single `[a-z0-9]` (stored lowercase), reserved keys `m`/`y` rejected, multi-character suffix and empty command are usage errors
+- [ ] Runtime: snapshot the live caption log to a temp file, spawn detached `/bin/sh -c` with `$HARK_TRANSCRIPT` set on the child, stdio → `/dev/null`, one-line stderr ack, temp file removed when the child exits, re-entrant, works while paused
+- [ ] Empty log → `nothing to pass yet` notice, no spawn; controls hint lists bound keys
+- [ ] Tests (binding parse/validation, reserved rejection, snapshot content, spawn via an injected runner, hint text) + README/man/reference docs + US13 criteria
+
+### Phase 13.2 — Combined interactive agent (Feature 25, US14)
+
+- [ ] Lift the `--interactive` ⊥ `--remote-control` exclusivity (`Hark.validate()`); keep the TTY requirement
+- [ ] Persistent TUI that outlives sessions: idle until `POST /start`, captions while recording, Enter = stop session (not process), Ctrl-C = quit; caption log kept after stop, cleared on the next start
+- [ ] Per-session wiring of `CaptureControl`/`LiveTranscriber`/status into the long-lived UI (today `runLiveInput` owns the session, and `StartRequest.makeCommand` forces `interactive = false`)
+- [ ] Idle-key semantics (space/m notices, y/shortcuts on an empty log); headless `--remote-control` and one-shot `--interactive` unchanged
+- [ ] Tests (idle/recording state machine, session hand-off, unchanged one-shot paths) + README/man/`docs/remote-control.md` + US14 criteria
 
 ## Future
 

@@ -147,6 +147,15 @@ curl -s http://127.0.0.1:8473/status
 `paused`, `stopped`, `failed`. `muted` reflects the microphone mute toggle (see
 `/mute`).
 
+**Wedged captures.** `POST /stop` reports `stopped` optimistically; the capture
+worker confirms it. If the worker doesn't finish within `$HARK_STOP_TIMEOUT`
+seconds (default 10) — which happens when the audio stream can't be torn down,
+most often a missing or stale **System Audio Recording** grant — the session
+flips to `failed` with an explanatory `error`, and the reason is logged. While a
+worker is stuck, `POST /start` returns `409` rather than accepting a session that
+could never record (captures run on one serial queue). Restart the agent
+(`brew services restart hark`) if it stays wedged.
+
 ### `POST /start`
 
 The JSON body mirrors the CLI flags; any field overrides the agent's launch-time
@@ -230,7 +239,7 @@ audio keeps recording); it is independent of pause and idempotent.
 | `401` | missing/incorrect bearer token |
 | `403` | permission denied (microphone / system audio) |
 | `404` | control verb with no active recording; input not found |
-| `409` | a recording is already active |
+| `409` | a recording is already active, the previous capture is still finishing, or an output exists and `ifExists: "error"` was requested |
 | `422` | unusable engine/model; or `mute`/`unmute` on a capture with no microphone |
 
 Errors carry a JSON body `{ "error": "…" }`.

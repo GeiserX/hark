@@ -433,6 +433,21 @@ Default working directory for relative artifact paths.
 Default policy for existing output files
 .RB ( ask / error / overwrite / unique ).
 .TP
+.B HARK_TEARDOWN_TIMEOUT
+Seconds to wait for the audio stream to stop before finalizing the recording
+anyway (default 5; 0 waits indefinitely). A capture that never had a working
+System Audio Recording grant can block the Core Audio teardown; the recording
+is still written.
+.TP
+.B HARK_STOP_TIMEOUT
+Seconds the
+.B \-\-remote\-control
+agent waits for a stopped capture to finish before reporting the session as
+.B failed
+in
+.B GET /status
+(default 10).
+.TP
 .B HARK_CAPTURE
 Default system/app capture backend
 .RB ( auto / sckit / coreaudio ).
@@ -598,6 +613,14 @@ an unsigned build, prompts are attributed to the terminal that runs
 See
 .I docs/permissions.md
 in the project for setup details.
+.SH RESPONSIBLE USE
+Recording other people is regulated in many places, and consent requirements
+differ by jurisdiction. Capture is gated by macOS permissions \(em
+.B hark
+cannot record covertly \(em but obtaining consent for meeting recordings and
+complying with local law is the operator's responsibility. See
+.I docs/legal.md
+in the project for export classification and responsible\-use notes.
 .SH SEE ALSO
 .BR whisper\-cli (1),
 .BR ffmpeg (1),
