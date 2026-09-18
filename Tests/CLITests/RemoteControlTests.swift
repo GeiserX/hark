@@ -281,6 +281,103 @@ struct RemoteSessionManagerTests {
         #expect(control.isMuted == true)
     }
 
+    // MARK: Stop-timeout watchdog (a capture that never finishes)
+
+    /// Scheduler stand-in: captures the watchdog's work so the test fires it
+    /// deterministically instead of waiting out a real timeout.
+    private final class ManualScheduler: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending: [@Sendable () -> Void] = []
+
+        var schedule: RemoteSessionManager.Scheduler {
+            { [self] _, work in
+                lock.lock(); pending.append(work); lock.unlock()
+            }
+        }
+
+        func fire() {
+            lock.lock(); let work = pending; pending = []; lock.unlock()
+            work.forEach { $0() }
+        }
+    }
+
+    @Test func stopTimeoutMarksAWedgedSessionFailed() throws {
+        let clock = ManualScheduler()
+        let manager = RemoteSessionManager(stopTimeout: 10, schedule: clock.schedule)
+        _ = try manager.begin(
+            id: "a", control: CaptureControl(), hasMic: true, muted: false,
+            audio: "rec.m4a", transcript: "rec.txt")
+        #expect(try manager.stop().state == .stopped)  // optimistic
+        #expect(manager.current()?.error == nil)
+
+        clock.fire()  // the worker never called finish()
+
+        #expect(manager.current()?.state == .failed)
+        #expect(manager.current()?.error?.contains("did not finish within 10s") == true)
+        #expect(manager.current()?.error?.contains("System Audio Recording") == true)
+        #expect(manager.isFinishing())
+    }
+
+    /// The normal path: the worker reported back, so the watchdog is inert.
+    @Test func stopTimeoutIsInertOnACleanStop() throws {
+        let clock = ManualScheduler()
+        let manager = RemoteSessionManager(stopTimeout: 10, schedule: clock.schedule)
+        _ = try manager.begin(
+            id: "a", control: CaptureControl(), hasMic: true, muted: false,
+            audio: nil, transcript: "n.txt")
+        _ = try manager.stop()
+        manager.finish(id: "a", error: nil)
+
+        clock.fire()
+
+        #expect(manager.current()?.state == .stopped)
+        #expect(manager.current()?.error == nil)
+        #expect(!manager.isFinishing())
+    }
+
+    /// Captures share one serial queue, so a start behind a wedged worker would
+    /// return 201 and never record. It must be refused instead.
+    @Test func wedgedWorkerRefusesNewSessions() throws {
+        let clock = ManualScheduler()
+        let manager = RemoteSessionManager(stopTimeout: 10, schedule: clock.schedule)
+        _ = try manager.begin(
+            id: "a", control: CaptureControl(), hasMic: true, muted: false,
+            audio: nil, transcript: "n.txt")
+        _ = try manager.stop()
+        clock.fire()
+
+        do {
+            _ = try manager.begin(
+                id: "b", control: CaptureControl(), hasMic: true, muted: false,
+                audio: nil, transcript: "x.txt")
+            Issue.record("expected AgentError.finishing")
+        } catch AgentError.finishing {
+        } catch {
+            Issue.record("expected AgentError.finishing, got \(error)")
+        }
+    }
+
+    /// If the worker does eventually return, the slot is released (a new session
+    /// can start) but the client-visible failure verdict stands.
+    @Test func lateFinishReleasesTheSlotAndKeepsTheVerdict() throws {
+        let clock = ManualScheduler()
+        let manager = RemoteSessionManager(stopTimeout: 10, schedule: clock.schedule)
+        _ = try manager.begin(
+            id: "a", control: CaptureControl(), hasMic: true, muted: false,
+            audio: nil, transcript: "n.txt")
+        _ = try manager.stop()
+        clock.fire()
+        manager.finish(id: "a", error: nil)
+
+        #expect(manager.current()?.state == .failed)
+        #expect(manager.current()?.error?.contains("did not finish") == true)
+        #expect(!manager.isFinishing())
+        let next = try manager.begin(
+            id: "b", control: CaptureControl(), hasMic: true, muted: false,
+            audio: nil, transcript: "x.txt")
+        #expect(next.state == .recording)
+    }
+
     @Test func finishAllowsANewSession() throws {
         let manager = RemoteSessionManager()
         _ = try manager.begin(

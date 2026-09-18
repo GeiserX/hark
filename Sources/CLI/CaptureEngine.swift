@@ -31,6 +31,14 @@ struct CaptureEngine {
     /// captured chunks (a true gap); stop ends capture like a signal. nil for
     /// the plain one-shot CLI path.
     var control: CaptureControl? = nil
+    /// How long `session.stop()` gets to tear the audio stream down before the
+    /// recording is finalized anyway. A tap that can't reach the stream (e.g. a
+    /// stale "System Audio Recording" grant) has been seen to block forever in
+    /// the HAL teardown calls, which used to hang the whole process — and, in
+    /// the remote agent, every later session. `$HARK_TEARDOWN_TIMEOUT`, 0 = wait
+    /// indefinitely (the old behavior).
+    var teardownTimeout: TimeInterval =
+        ProcessInfo.processInfo.environment["HARK_TEARDOWN_TIMEOUT"].flatMap(Double.init) ?? 5
 
     /// Builds the capture session, output PCM format, and a human-readable
     /// source label for the requested source.
@@ -140,6 +148,10 @@ struct CaptureEngine {
         let ioQueue = DispatchQueue(label: "hark.capture.io")
         let failure = FailureBox()
         let done = DispatchSemaphore(value: 0)
+        // Set before teardown so chunks still arriving from the audio thread are
+        // dropped instead of racing the sinks being finalized (a teardown that
+        // times out leaves the stream running).
+        let stopping = LockBox<Bool>()
 
         // Stall watchdog: the OS can interrupt capture on screen lock, display/
         // system sleep, or a device change, after which the backend stops
@@ -174,6 +186,9 @@ struct CaptureEngine {
         do {
             try session.start { data in
                 ioQueue.async {
+                    // Capture is being torn down: the sinks are finalized (or
+                    // about to be), so late chunks are dropped.
+                    if stopping.get() == true { return }
                     // Paused (interactive/remote): drop the chunk entirely — no
                     // write, no duration budget consumed — so the output holds a
                     // true gap and --duration still counts only captured audio.
@@ -240,8 +255,23 @@ struct CaptureEngine {
 
         // Tear down: stop capture, drain pending writes, finalize sinks
         // (mixed first, then the per-source attribution sinks).
-        session.stop()
-        ioQueue.sync {}
+        //
+        // `session.stop()` and the drain are bounded: the HAL teardown calls
+        // (AudioDeviceStop / DestroyIOProcID / DestroyAggregateDevice / tap
+        // destroy) can block indefinitely when the stream is unreachable, and
+        // hanging here used to lose the whole recording — and wedge the remote
+        // agent's capture queue. On timeout we log and finalize anyway, so the
+        // audio captured so far is still written and playable.
+        stopping.set(true)
+        if !Self.runBounded(teardownTimeout, label: "stopping the audio stream", { session.stop() }) {
+            Log.error("""
+                the audio stream did not stop within \
+                \(ConfigKey.formatNumber(teardownTimeout))s; finalizing the recording anyway. \
+                This usually means the capture never had a working "System Audio Recording" \
+                grant (see docs/permissions.md).
+                """)
+        }
+        _ = Self.runBounded(teardownTimeout, label: "draining pending writes", { ioQueue.sync {} })
         for sink in sinks + sourceSinks.map(\.1) {
             do {
                 try sink.finalize()
@@ -277,6 +307,26 @@ struct CaptureEngine {
                 retry.
                 """)
         }
+    }
+
+    /// Runs `work` on a background thread and waits at most `timeout` seconds
+    /// for it (0 = wait indefinitely). Returns false if it didn't finish in
+    /// time; the abandoned work keeps running and dies with the process.
+    static func runBounded(
+        _ timeout: TimeInterval, label: String, _ work: @escaping @Sendable () -> Void
+    ) -> Bool {
+        guard timeout > 0 else {
+            work()
+            return true
+        }
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            work()
+            finished.signal()
+        }
+        if finished.wait(timeout: .now() + timeout) == .success { return true }
+        Log.verbose("\(label) exceeded \(ConfigKey.formatNumber(timeout))s; continuing")
+        return false
     }
 
     /// Creates a single-file sink for the given format. Metadata is embedded

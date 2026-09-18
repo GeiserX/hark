@@ -5,8 +5,21 @@ import Foundation
 /// HTTP status codes by `RemoteControlAgent`.
 enum AgentError: Error {
     case busy            // a recording is already active (409)
+    case finishing       // the previous capture's worker never returned (409)
     case noActiveSession // pause/resume/stop with nothing running (404)
     case noMicrophone    // mute/unmute on a capture with no mic (422)
+}
+
+/// Agent timing knobs.
+enum AgentTimeouts {
+    /// How long after a stop request the worker gets to finish before the
+    /// session is declared wedged. A capture that can't reach the audio stream
+    /// (e.g. a stale "System Audio Recording" grant) has been seen to block
+    /// forever in teardown; without this the session would sit in `stopped`
+    /// with no error while the serial capture queue stayed blocked.
+    static var stopTimeout: TimeInterval {
+        ProcessInfo.processInfo.environment["HARK_STOP_TIMEOUT"].flatMap(Double.init) ?? 10
+    }
 }
 
 /// Tracks the agent's **single** active recording session (PRD §6.10). Thread-
@@ -32,14 +45,41 @@ final class RemoteSessionManager: @unchecked Sendable {
         var error: String?
     }
 
+    /// Schedules the stop-timeout check. Injectable so tests drive it without
+    /// waiting on wall-clock time.
+    typealias Scheduler = @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
+
     private let lock = NSLock()
     private var control: CaptureControl?
     private var snapshot: Snapshot?
+    /// True from `begin` until the capture worker reports back via `finish` —
+    /// independent of session `state`, which `stop()` sets optimistically. A
+    /// worker that never returns keeps this true, and since captures run on one
+    /// serial queue, starting another session would silently queue behind it.
+    private var workerRunning = false
+    private let stopTimeout: TimeInterval
+    private let schedule: Scheduler
+
+    init(
+        stopTimeout: TimeInterval = AgentTimeouts.stopTimeout,
+        schedule: @escaping Scheduler = { after, work in
+            DispatchQueue.global().asyncAfter(deadline: .now() + after, execute: work)
+        }
+    ) {
+        self.stopTimeout = stopTimeout
+        self.schedule = schedule
+    }
 
     /// True while a recording is active (recording or paused).
     private var isActive: Bool {
         guard let snapshot else { return false }
         return snapshot.state == .recording || snapshot.state == .paused
+    }
+
+    /// True while the capture worker of the last session hasn't returned.
+    func isFinishing() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return workerRunning && !isActive
     }
 
     /// The last/current session snapshot (nil before the first `begin`).
@@ -49,13 +89,16 @@ final class RemoteSessionManager: @unchecked Sendable {
     }
 
     /// Registers a new active session. Throws `.busy` if one is already running,
-    /// or `.noMicrophone` if `muted` is requested for a capture with no mic.
+    /// `.finishing` if the previous session's worker hasn't returned (its
+    /// capture would otherwise queue behind a wedged one and never run), or
+    /// `.noMicrophone` if `muted` is requested for a capture with no mic.
     func begin(
         id: String, control: CaptureControl, hasMic: Bool, muted: Bool,
         audio: String?, transcript: String?
     ) throws -> Snapshot {
         lock.lock(); defer { lock.unlock() }
         guard !isActive else { throw AgentError.busy }
+        guard !workerRunning else { throw AgentError.finishing }
         if muted {
             guard hasMic else { throw AgentError.noMicrophone }
             control.mute()  // start muted; the capture reads isMuted from the off
@@ -65,6 +108,7 @@ final class RemoteSessionManager: @unchecked Sendable {
             audio: audio, transcript: transcript, hasMic: hasMic, muted: muted, error: nil)
         self.control = control
         self.snapshot = snap
+        self.workerRunning = true
         return snap
     }
 
@@ -88,25 +132,66 @@ final class RemoteSessionManager: @unchecked Sendable {
     }
 
     /// Requests a stop on the active session and marks it stopped optimistically;
-    /// the worker's `finish` confirms the final state.
+    /// the worker's `finish` confirms the final state. If the worker doesn't
+    /// report back within `stopTimeout`, the session is marked `failed` so
+    /// `GET /status` reflects a wedged capture instead of a clean stop.
     func stop() throws -> Snapshot {
-        lock.lock(); defer { lock.unlock() }
-        guard isActive, var snap = snapshot, let control else { throw AgentError.noActiveSession }
+        lock.lock()
+        guard isActive, var snap = snapshot, let control else {
+            lock.unlock()
+            throw AgentError.noActiveSession
+        }
         control.stop()
         snap.state = .stopped
         snapshot = snap
+        let id = snap.id
+        lock.unlock()
+
+        schedule(stopTimeout) { [weak self] in
+            self?.failIfUnfinished(id: id)
+        }
         return snap
     }
 
+    /// Marks a stopped-but-unfinished session as failed (the stop-timeout
+    /// watchdog). Returns true when it transitioned, i.e. the worker really is
+    /// wedged. Leaves `workerRunning` set: the thread is still stuck, so a new
+    /// session must keep being refused rather than queue behind it.
+    @discardableResult
+    func failIfUnfinished(id: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard var snap = snapshot, snap.id == id, workerRunning, snap.state == .stopped
+        else { return false }
+        snap.state = .failed
+        snap.error = Self.wedgedMessage(after: stopTimeout)
+        snapshot = snap
+        Log.error(snap.error!)
+        return true
+    }
+
+    /// Message for a capture that never finished after a stop request.
+    static func wedgedMessage(after seconds: TimeInterval) -> String {
+        """
+        capture did not finish within \(ConfigKey.formatNumber(seconds))s — the audio stream \
+        appears wedged (most often a missing or stale "System Audio Recording" grant; see \
+        docs/permissions.md). New recordings are refused while it is stuck; restart the agent \
+        if this persists (e.g. brew services restart hark).
+        """
+    }
+
     /// Called by the capture worker when `executeLive` returns: records the
-    /// terminal state and releases the control.
+    /// terminal state and releases the control. A session already declared
+    /// wedged by the stop-timeout keeps that verdict — the client was told it
+    /// failed — but the worker slot is released either way.
     func finish(id: String, error: String?) {
         lock.lock(); defer { lock.unlock() }
         guard var snap = snapshot, snap.id == id else { return }
+        workerRunning = false
+        control = nil
+        guard snap.state != .failed || snap.error == nil else { return }
         snap.state = error == nil ? .stopped : .failed
         snap.error = error
         snapshot = snap
-        control = nil
     }
 
     /// Stops whatever is active (used on agent shutdown / SIGINT).

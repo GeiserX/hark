@@ -57,6 +57,11 @@ final class RemoteControlAgent: @unchecked Sendable {
             Log.notice("shutting down remote-control agent…")
             shuttingDown.set(true)
             sessions.stopActive()
+            if sessions.isFinishing() {
+                // Visible in the service log: the process exits regardless (the
+                // stuck thread goes with it), but say so rather than look clean.
+                Log.notice("a previous capture was still finishing; exiting anyway")
+            }
             Task { await server.stop(timeout: 1) }
         }
 
@@ -202,6 +207,14 @@ final class RemoteControlAgent: @unchecked Sendable {
         switch error {
         case AgentError.busy:
             return self.error("a recording is already active", .conflict)
+        case AgentError.finishing:
+            // The previous capture's worker never returned (see the stop-timeout
+            // watchdog). Captures run on one serial queue, so accepting this
+            // start would return 201 for a session that never records.
+            return self.error(
+                "the previous capture is still finishing and no new recording can start; "
+                    + "check GET /status and restart the agent if it stays wedged",
+                .conflict)
         case AgentError.noActiveSession:
             return self.error("no active recording", .notFound)
         case AgentError.noMicrophone:
