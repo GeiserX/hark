@@ -6,6 +6,20 @@ All notable changes to Hark are documented here. The format is loosely based on
 
 ## [Unreleased]
 
+### Fixed
+- Diarized batch transcription (`hark -i FILE --speakers`, and the end-of-capture
+  `--diarize-engine offline` pass) no longer loses short utterances. It only
+  transcribed audio that fell inside a diarizer segment, and FluidAudio discarded
+  every segment shorter than `minSpeechDuration` — 1.0 s by default, which hark
+  never overrode — so a 0.55 s "Hello." that plain batch transcribed fine never
+  reached the recognizer at all. The floor is now 0.25 s: low enough to keep
+  those turns, high enough to stay above the pipeline's own ~0.17 s activity
+  floor, which is what stops a brief noise burst creating a spurious
+  `Speaker N`. On a 26-turn two-voice clip (clean, and again with room noise and
+  taps) every turn from 0.4 s up now survives, the speaker count stays at the
+  true two, and no turn the old floor already transcribed changes its words or
+  its speaker.
+
 ## [0.4.3] - 2026-09-17
 
 ### Fixed

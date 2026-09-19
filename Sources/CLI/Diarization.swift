@@ -14,6 +14,30 @@ enum DiarizationDefaults {
     /// lands near `0.78`, separating voices without over-splitting. Overridden by
     /// `--speaker-threshold`. (`Double` so `config show` can render it cleanly.)
     static let clusteringThreshold: Double = 0.65
+
+    /// Shortest span (seconds) the offline diarizer is allowed to emit.
+    ///
+    /// FluidAudio's library default is `1.0`, so every sub-second utterance was
+    /// discarded before the recognizer ever saw it — a 0.55 s "Hello." that plain
+    /// batch transcribes fine vanished from a diarized one. The same value also
+    /// gates new-speaker creation in `SpeakerManager`, so it can't go arbitrarily
+    /// low: `0.25` keeps it above the pipeline's independent activity floor
+    /// (`minActiveFramesCount`, 10 frames ≈ 0.17 s), which is what stops a brief
+    /// noise burst minting a spurious `Speaker N`. Measured on a 26-turn two-voice
+    /// clip (clean and with room noise): every turn from 0.4 s up survives, the
+    /// label count stays at the true 2, and no turn that `1.0` already
+    /// transcribed changes its words or its speaker.
+    static let minSpeechDuration: Double = 0.25
+
+    /// The `DiarizerConfig` hark runs offline diarization with. Pure, so the
+    /// tuning above is unit-testable without loading the CoreML models.
+    static func offlineConfig(maxSpeakers: Int?, threshold: Double?) -> DiarizerConfig {
+        var config = DiarizerConfig()
+        if let maxSpeakers { config.numClusters = maxSpeakers }
+        config.clusteringThreshold = Float(threshold ?? clusteringThreshold)
+        config.minSpeechDuration = Float(minSpeechDuration)
+        return config
+    }
 }
 
 /// One diarized span: a time range attributed to a speaker label.
@@ -88,10 +112,8 @@ final class SpeakerDiarizer {
         } else {
             Log.notice("downloading diarization model (first use)…")
         }
-        var config = DiarizerConfig()
-        if let maxSpeakers { config.numClusters = maxSpeakers }
-        config.clusteringThreshold = Float(threshold ?? DiarizationDefaults.clusteringThreshold)
-        let manager = DiarizerManager(config: config)
+        let manager = DiarizerManager(
+            config: DiarizationDefaults.offlineConfig(maxSpeakers: maxSpeakers, threshold: threshold))
         let models = try RunLoopBridge.runBlocking(timeout: 1800) {
             UncheckedSendableBox(value: try await DiarizerModels.downloadIfNeeded())
         }
