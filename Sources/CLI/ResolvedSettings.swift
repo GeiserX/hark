@@ -28,6 +28,10 @@ struct ResolvedSettings: Equatable {
     let silenceThreshold: Double
     let useVad: Bool
     let vadThreshold: Double?  // nil = engine default (FluidVadClassifier.defaultThreshold)
+    /// Live segmentation: silence that closes a segment, and the cap on unbroken
+    /// speech after which one is cut anyway (both seconds; VAD and amplitude paths).
+    let segmentPause: Double
+    let segmentWindow: Double
     let useGain: Bool
 
     let speakers: Bool
@@ -106,6 +110,12 @@ struct ResolvedSettings: Equatable {
         let vadThreshold = try double(a.vadThreshold, .vadThreshold, config.vadThreshold) {
             try ConfigKey.parseUnit($0, .vadThreshold)
         }
+        let segmentPause = try double(a.segmentPause, .segmentPause, config.segmentPause) {
+            try ConfigKey.parseSegmentPause($0, .segmentPause)
+        } ?? 0.7
+        let segmentWindow = try double(a.segmentWindow, .segmentWindow, config.segmentWindow) {
+            try ConfigKey.parseSegmentWindow($0, .segmentWindow)
+        } ?? 12
         let useGain = try bool(a.useGain, .gain, config.gain, default: true)
 
         let speakers = try bool(a.speakers, .speakers, config.speakers, default: false)
@@ -137,6 +147,7 @@ struct ResolvedSettings: Equatable {
             captureBackend: captureBackend, rate: rate, bits: bits, channels: channels,
             keepAwake: keepAwake,
             silenceThreshold: silenceThreshold, useVad: useVad, vadThreshold: vadThreshold,
+            segmentPause: segmentPause, segmentWindow: segmentWindow,
             useGain: useGain, speakers: speakers, speakerMode: speakerMode,
             speakerLabels: speakerLabels, diarizeEngine: diarizeEngine, maxSpeakers: maxSpeakers,
             speakerThreshold: speakerThreshold, remoteControlPort: remoteControlPort)
@@ -155,6 +166,14 @@ struct ResolvedSettings: Equatable {
         }
         guard silenceThreshold < 0 else {
             throw HarkError.usage("silence threshold must be negative (dBFS).")
+        }
+        // A window at or below the pause would cut every segment on the clock
+        // instead of on silence; the flag pair is checked in `Hark.validate()`,
+        // this catches the env/config mixes it can't see.
+        guard segmentWindow > segmentPause else {
+            throw HarkError.usage(
+                "segment-window (\(ConfigKey.formatNumber(segmentWindow))s) must be greater than "
+                    + "segment-pause (\(ConfigKey.formatNumber(segmentPause))s).")
         }
     }
 

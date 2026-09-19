@@ -214,6 +214,18 @@ Live VAD speech\-detection sensitivity (default
 Lower catches quieter speech (fewer dropped phrases on low\-level captures);
 higher is stricter. Apple Silicon only.
 .TP
+.BI \-\-segment\-pause " sec"
+Live: seconds of silence that end a transcript segment (0\-5, default
+.BR 0.7 ).
+Lower emits lines sooner.
+.TP
+.BI \-\-segment\-window " sec"
+Live: seconds of unbroken speech after which a transcript segment is cut
+anyway (1\-60, default
+.BR 12 ).
+Must be greater than
+.BR \-\-segment\-pause .
+.TP
 .BR \-\-vad ", " \-\-no\-vad
 Use the on\-device VAD for live segmentation (default on, Apple Silicon);
 .B \-\-no\-vad

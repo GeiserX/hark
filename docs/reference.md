@@ -104,6 +104,15 @@ default `0.5`) tunes where turns are cut. Segments are also peak-normalized
 before the engine to improve recognition of low-level audio (the recording is
 unaffected; disable with `HARK_GAIN=off`).
 
+### Segment timing
+
+A live transcript line appears when the speaker pauses for `--segment-pause`
+seconds (0–5, default `0.7`), or when unbroken speech reaches `--segment-window`
+seconds (1–60, default `12`). Lower both to see text sooner, at the cost of
+shorter segments with less context for the engine. The window must be greater
+than the pause. Both apply to the VAD path and to the amplitude fallback
+(`--no-vad`).
+
 ## Speaker labels
 
 | Flag | Meaning |
@@ -139,6 +148,8 @@ Every setting has a flag, a `$HARK_*` env var, and a config key. The env var is
 | `silence-threshold` | `--silence-threshold` | `-50` |
 | `vad` | `--vad`/`--no-vad` | `true` |
 | `vad-threshold` | `--vad-threshold` | `0.5` |
+| `segment-pause` | `--segment-pause` | `0.7` |
+| `segment-window` | `--segment-window` | `12` |
 | `gain` | `--gain`/`--no-gain` | `true` |
 | `speakers` | `--speakers`/`--no-speakers` | `false` |
 | `speaker-mode` | `--speaker-mode` | `auto` |

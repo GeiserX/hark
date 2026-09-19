@@ -102,6 +102,8 @@ enum ConfigKey: String, CaseIterable {
     case silenceThreshold = "silence-threshold"
     case vad
     case vadThreshold = "vad-threshold"
+    case segmentPause = "segment-pause"
+    case segmentWindow = "segment-window"
     case gain
     case speakers
     case speakerMode = "speaker-mode"
@@ -210,6 +212,28 @@ enum ConfigKey: String, CaseIterable {
         }
         guard n > 0 && n <= 1 else {
             throw HarkError.usage("\(key.rawValue) must be between 0 and 1.")
+        }
+        return n
+    }
+
+    /// Silence that ends a live transcript segment, in seconds (0 < s ≤ 5).
+    static func parseSegmentPause(_ value: String, _ key: ConfigKey) throws -> Double {
+        guard let n = Double(value) else {
+            throw HarkError.usage("\(key.rawValue) must be a number of seconds (got '\(value)').")
+        }
+        guard n > 0 && n <= 5 else {
+            throw HarkError.usage("\(key.rawValue) must be between 0 and 5 seconds.")
+        }
+        return n
+    }
+
+    /// Longest unbroken speech before a live segment is cut anyway, in seconds (1 ≤ s ≤ 60).
+    static func parseSegmentWindow(_ value: String, _ key: ConfigKey) throws -> Double {
+        guard let n = Double(value) else {
+            throw HarkError.usage("\(key.rawValue) must be a number of seconds (got '\(value)').")
+        }
+        guard n >= 1 && n <= 60 else {
+            throw HarkError.usage("\(key.rawValue) must be between 1 and 60 seconds.")
         }
         return n
     }

@@ -68,6 +68,11 @@ struct RootParsingTests {
         ["--speakers", "--speaker-threshold", "1.5"],  // out of (0,1]
         ["--vad-threshold", "0"],                      // out of (0,1]
         ["--vad-threshold", "1.5"],                    // out of (0,1]
+        ["--segment-pause", "0"],                      // out of (0,5]
+        ["--segment-pause", "6"],                      // out of (0,5]
+        ["--segment-window", "0.5"],                   // out of [1,60]
+        ["--segment-window", "61"],                    // out of [1,60]
+        ["--segment-pause", "3", "--segment-window", "2"],  // window must exceed pause
         ["--interactive", "-i", "f.wav"],              // interactive is live-only
         ["--interactive", "-a", "-"],                  // interactive owns the terminal
     ])
@@ -104,6 +109,7 @@ struct RootParsingTests {
         ["--speakers", "--max-speakers", "3"],
         ["--speakers", "--speaker-threshold", "0.5"],
         ["--vad-threshold", "0.5"],                             // general live VAD knob
+        ["--segment-pause", "0.3", "--segment-window", "5"],    // faster live segments
         ["--no-speakers"], ["--no-vad"], ["--no-gain"],         // three-state toggles
         ["--speaker-mode", "source"],                          // companion flags: ignored if speakers off
         ["--max-speakers", "2"], ["--diarize-engine", "offline"],

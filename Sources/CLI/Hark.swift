@@ -195,6 +195,18 @@ struct Hark: ParsableCommand {
         valueName: "0..1"))
     var vadThreshold: Double?
 
+    @Option(name: .customLong("segment-pause"), help: ArgumentHelp(
+        "Live: seconds of silence that end a transcript segment (0–5; default 0.7). "
+            + "Lower emits lines sooner. Or $HARK_SEGMENT_PAUSE / config.",
+        valueName: "sec"))
+    var segmentPause: Double?
+
+    @Option(name: .customLong("segment-window"), help: ArgumentHelp(
+        "Live: seconds of unbroken speech after which a transcript segment is cut "
+            + "anyway (1–60; default 12). Or $HARK_SEGMENT_WINDOW / config.",
+        valueName: "sec"))
+    var segmentWindow: Double?
+
     // MARK: Format overrides
 
     @Option(name: .customLong("format"), help: ArgumentHelp(
@@ -494,6 +506,15 @@ struct Hark: ParsableCommand {
         if let vadThreshold, !(vadThreshold > 0 && vadThreshold <= 1) {
             throw ValidationError("--vad-threshold must be between 0 and 1.")
         }
+        if let segmentPause, !(segmentPause > 0 && segmentPause <= 5) {
+            throw ValidationError("--segment-pause must be between 0 and 5 seconds.")
+        }
+        if let segmentWindow, !(segmentWindow >= 1 && segmentWindow <= 60) {
+            throw ValidationError("--segment-window must be between 1 and 60 seconds.")
+        }
+        if let segmentPause, let segmentWindow, segmentWindow <= segmentPause {
+            throw ValidationError("--segment-window must be greater than --segment-pause.")
+        }
 
         // Speaker recognition value formats (flag-level). Cross-cutting checks
         // that depend on the resolved mode (which may come from env/config) —
@@ -784,7 +805,8 @@ struct Hark: ParsableCommand {
                 // Interactive: a file destination never reaches the UI, so echo
                 // captions to the screen too (PRD §6.9).
                 screenEcho: interactive && transcriptDest.isFile,
-                transcriptLog: transcriptLog)
+                transcriptLog: transcriptLog,
+                pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
             sinks.append(transcriber)
             liveTranscriber = transcriber
             if !interactive && externalControl == nil && outputs.audio == nil && duration == nil {
@@ -880,13 +902,15 @@ struct Hark: ParsableCommand {
             language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
             useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
-            screenEcho: echoToScreen, transcriptLog: transcriptLog)
+            screenEcho: echoToScreen, transcriptLog: transcriptLog,
+            pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
         let systemTranscriber = LiveTranscriber(
             sharedWriter: writer, sharedBackend: backend, speaker: labels.others,
             resolver: systemDiarizer, language: settings.language, translate: settings.translate,
             captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
             useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
-            screenEcho: echoToScreen, transcriptLog: transcriptLog)
+            screenEcho: echoToScreen, transcriptLog: transcriptLog,
+            pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
 
         let othersDesc = systemDiarizer != nil ? "Speaker N" : labels.others
         if outputs.audio == nil && duration == nil {
@@ -938,7 +962,8 @@ struct Hark: ParsableCommand {
             labelName: "live transcript [Speaker N]", resolver: diarizer,
             useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
             // Interactive: echo captions to the screen too (PRD §6.9).
-            screenEcho: interactive && transcriptDest.isFile, transcriptLog: transcriptLog)
+            screenEcho: interactive && transcriptDest.isFile, transcriptLog: transcriptLog,
+            pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
 
         if outputs.audio == nil && duration == nil {
             Log.notice("listening (speakers: Speaker N) — press Ctrl+C to stop")

@@ -6,6 +6,16 @@ All notable changes to Hark are documented here. The format is loosely based on
 
 ## [Unreleased]
 
+### Added
+- Live segmentation timing is configurable: `--segment-pause` (seconds of
+  silence that end a transcript segment, default `0.7`) and `--segment-window`
+  (seconds of unbroken speech after which a segment is cut anyway, default
+  `12`), also `$HARK_SEGMENT_PAUSE` / `$HARK_SEGMENT_WINDOW`, config keys
+  `segment-pause` / `segment-window`, and `segmentPause` / `segmentWindow` on
+  `POST /start`. They set how soon a line appears in a live transcript; both the
+  VAD and the amplitude (`--no-vad`) paths honour them. The pause must be 0–5 s,
+  the window 1–60 s and greater than the pause. Defaults are unchanged.
+
 ## [0.4.3] - 2026-09-17
 
 ### Fixed
