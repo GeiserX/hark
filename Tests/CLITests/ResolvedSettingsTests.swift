@@ -32,6 +32,7 @@ struct ResolvedSettingsTests {
         #expect(s.maxSpeakers == nil)
         #expect(s.speakerThreshold == nil)
         #expect(s.remoteControlPort == 8473)
+        #expect(s.tracks == .mixed)  // today's single summed -a stream
     }
 
     @Test func configProvidesDefaults() throws {
@@ -204,7 +205,8 @@ extension ResolvedSettings {
             engine: engine, language: language, translate: translate, micDevice: micDevice,
             directory: directory, ifExists: ifExists, captureBackend: captureBackend,
             rate: rate, bits: bits,
-            channels: channels, keepAwake: keepAwake, silenceThreshold: silenceThreshold,
+            channels: channels, tracks: tracks, keepAwake: keepAwake,
+            silenceThreshold: silenceThreshold,
             useVad: useVad, vadThreshold: vadThreshold, useGain: useGain, speakers: speakers,
             speakerMode: speakerMode, speakerLabels: speakerLabels, diarizeEngine: diarizeEngine,
             maxSpeakers: maxSpeakers, speakerThreshold: speakerThreshold,
