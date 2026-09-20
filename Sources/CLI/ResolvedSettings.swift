@@ -22,6 +22,9 @@ struct ResolvedSettings: Equatable {
     let rate: Int?
     let bits: Int?
     let channels: Int?
+    /// How the two sources of a `--mix` capture are laid out in the `-a` file:
+    /// summed into one stream, or mic-left/system-right (PRD §6.7d).
+    let tracks: TrackLayout
     /// Keep the machine awake while recording (display too in interactive mode).
     let keepAwake: Bool
 
@@ -101,6 +104,9 @@ struct ResolvedSettings: Equatable {
         let channels = try int(a.channels, .channels, config.channels) {
             try ConfigKey.parseInt($0, .channels, oneOf: [1, 2])
         }
+        let tracks = try choice(
+            a.tracks, .tracks, config.tracks,
+            allowed: TrackLayout.allCases.map(\.rawValue), default: TrackLayout.mixed)
         let keepAwake = try bool(a.keepAwake, .keepAwake, config.keepAwake, default: false)
 
         let silenceThreshold = try double(a.silenceThreshold, .silenceThreshold, config.silenceThreshold) {
@@ -145,7 +151,7 @@ struct ResolvedSettings: Equatable {
             engine: engine, language: language, translate: translate, micDevice: micDevice,
             directory: directory, ifExists: ifExists,
             captureBackend: captureBackend, rate: rate, bits: bits, channels: channels,
-            keepAwake: keepAwake,
+            tracks: tracks, keepAwake: keepAwake,
             silenceThreshold: silenceThreshold, useVad: useVad, vadThreshold: vadThreshold,
             segmentPause: segmentPause, segmentWindow: segmentWindow,
             useGain: useGain, speakers: speakers, speakerMode: speakerMode,

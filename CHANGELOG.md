@@ -60,6 +60,18 @@ All notable changes to Hark are documented here. The format is loosely based on
   Intel, `--no-vad`, or the model failing to load — segments reach the engine
   in the capture format, which is stereo for system capture, through this same
   decode, so live transcription now hears both channels too.
+- `--tracks mixed|stereo` (also `$HARK_TRACKS`, config `tracks`, and the
+  remote-control `tracks` field). A meeting capture already has two separate
+  signals — your microphone and the call — but the saved `-a` file was their
+  sum, with left and right identical, so the separation was gone the moment the
+  file was written. `--tracks stereo` keeps them apart in the same single file:
+  the microphone on the left channel, the system/app audio on the right, ready
+  for `ffmpeg -filter_complex channelsplit` or any editor. It needs two sources
+  (`--mix` with `--system`/`--app`/`--exclude-app`) and both channels, and says
+  so instead of quietly falling back. Each side is folded to mono, so a
+  genuinely stereo system signal is downmixed. `mixed` stays the default and is
+  unchanged.
+
 ### Fixed
 - The separated `--speakers` tracks (the live transcribers, and the temporary
   WAVs the offline diarizer records) were written straight from the audio
