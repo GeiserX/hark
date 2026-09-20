@@ -28,6 +28,24 @@ All notable changes to Hark are documented here. The format is loosely based on
   taps) every turn from 0.4 s up now survives, the speaker count stays at the
   true two, and no turn the old floor already transcribed changes its words or
   its speaker.
+- `--speaker-mode source` now works on a two-channel file. An interview or call
+  recorded with your microphone on the left channel and the other side on the
+  right is transcribed one channel at a time and labeled by origin —
+  `You`/`Others`, or whatever `--speaker-labels` says — then merged into one
+  time-ordered transcript. Because the two voices never share a track, people
+  talking over each other both survive, which a mixed recording cannot do at
+  all. The labels are fixed by channel, but finding each channel's speech is
+  still the offline diarizer's job, so this needs Apple Silicon and the diarizer
+  model like every other `-i --speakers` run; only live source attribution is
+  model-free. `--speaker-mode auto` is unchanged: a stereo file is still
+  diarized as one recording, since most stereo is not one speaker per channel.
+
+### Changed
+- `-i FILE --speakers --speaker-mode source` on a file that has no two channels
+  to attribute (mono, or more than two) is now a usage error naming the channel
+  count, instead of being ignored. It used to produce a `Speaker 1/2…`
+  transcript that looked labeled but told you nothing about who was who.
+
 ### Fixed
 - Reading a stereo file threw away the right channel. Everything that folds a
   file down to mono — transcription, offline diarization, and a transcode to
