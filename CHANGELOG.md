@@ -6,6 +6,18 @@ All notable changes to Hark are documented here. The format is loosely based on
 
 ## [Unreleased]
 
+### Fixed
+- The separated `--speakers` tracks (the live transcribers, and the temporary
+  WAVs the offline diarizer records) were written straight from the audio
+  callback, so they skipped the three guards the mixed stream has. `--duration`
+  overran on them — a 2 s capture wrote 2.005 s of the mic track and up to
+  2.08 s of the system track — pause was read at a different point in the
+  pipeline than for the mixed stream, so a busy IO queue could keep a chunk on
+  one side and drop it on the other, and a chunk still arriving during teardown
+  could reach an already-finalized writer. Each track now hops to the capture IO
+  queue like the mixed stream and honours the same stop flag, pause state, and
+  duration budget.
+
 ## [0.4.3] - 2026-09-17
 
 ### Fixed
