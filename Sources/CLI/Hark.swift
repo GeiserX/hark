@@ -239,15 +239,18 @@ struct Hark: ParsableCommand {
 
     @Flag(name: [.customLong("speakers"), .customLong("diarize")], inversion: .prefixedNo, help: """
         Label transcript segments by speaker: by capture source ("You" = mic, \
-        "Others" = system) and/or acoustic diarization ("Speaker N"). Acoustic \
-        diarization needs Apple Silicon; source attribution works anywhere. \
+        "Others" = system) and/or acoustic diarization ("Speaker N"). Source \
+        attribution of a live capture works anywhere; acoustic diarization needs \
+        Apple Silicon, and so does labeling an -i FILE in any mode — that path \
+        finds each speaker's (or channel's) speech with the same model. \
         Or $HARK_SPEAKERS / hark config.
         """)
     var speakers: Bool?
 
     @Option(name: .customLong("speaker-mode"), help: ArgumentHelp(
-        "With --speakers: auto (source + diarization), source (mic vs system), "
-            + "or acoustic (diarize one stream). Or $HARK_SPEAKER_MODE / config.",
+        "With --speakers: auto (source + diarization), source (mic vs system, or "
+            + "an -i file's two channels), or acoustic (diarize one stream). "
+            + "Or $HARK_SPEAKER_MODE / config.",
         valueName: "auto|source|acoustic"))
     var speakerMode: SpeakerMode?
 
@@ -1094,11 +1097,21 @@ struct Hark: ParsableCommand {
         }
     }
 
-    /// Batch acoustic diarization (`-i FILE --speakers`): diarize, transcribe
-    /// each speaker span, and write a labeled transcript (PRD §6.7b).
-    private func runBatchDiarization(
+    /// Batch speaker labeling (`-i FILE --speakers`): acoustic diarization of
+    /// the recording, transcribing each speaker span (PRD §6.7b) — or, under
+    /// `--speaker-mode source`, per-channel source attribution of a two-channel
+    /// recording (PRD §6.7c). Either way it writes one labeled transcript.
+    /// Internal rather than private so tests can drive the mode dispatch itself.
+    func runBatchDiarization(
         audioPath: String, to destination: TranscriptDestination, settings: ResolvedSettings
     ) throws {
+        // Reject a file that cannot be attributed up front: the engine preflight
+        // below can ask for Speech authorization, and the diarizer loads a model.
+        let bySource = settings.speakerMode == .source
+        if bySource {
+            try BatchDiarization.requireSourceChannels(
+                AudioPipeline.channelCount(of: audioPath), path: audioPath)
+        }
         // Fail fast on an unusable engine before loading the diarizer model.
         try TranscriptionEngine.preflight(
             engineName: settings.engine, modelFlag: model,
@@ -1108,10 +1121,24 @@ struct Hark: ParsableCommand {
                 "note: diarize-engine streaming applies to live capture; using the offline diarizer for files.")
         }
         let format = transcriptFormat(for: destination)
-        let rendered = try BatchDiarization.diarizeAndTranscribe(
-            audioPath: audioPath, engineName: settings.engine, modelFlag: model,
-            language: settings.language, translate: settings.translate,
-            maxSpeakers: settings.maxSpeakers, threshold: settings.speakerThreshold, format: format)
+        let rendered: String
+        if bySource {
+            let labels = settings.speakerLabels
+            Log.verbose(
+                "two-channel input: channel 1 = \(labels.you), channel 2 = \(labels.others)")
+            let cues = try BatchDiarization.attributeChannels(
+                audioPath: audioPath, engineName: settings.engine, modelFlag: model,
+                language: settings.language, translate: settings.translate,
+                threshold: settings.speakerThreshold, labels: labels)
+            rendered = TranscriptFormatting.render(
+                cues: cues, fullText: cues.map(\.text).joined(separator: " "), format: format)
+        } else {
+            rendered = try BatchDiarization.diarizeAndTranscribe(
+                audioPath: audioPath, engineName: settings.engine, modelFlag: model,
+                language: settings.language, translate: settings.translate,
+                maxSpeakers: settings.maxSpeakers, threshold: settings.speakerThreshold,
+                format: format)
+        }
         try TranscribeEngine(
             engineName: settings.engine, modelFlag: model, language: settings.language,
             translate: settings.translate, format: format

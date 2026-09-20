@@ -115,6 +115,28 @@ unaffected; disable with `HARK_GAIN=off`).
 | `--speaker-threshold 0..1` | clustering sensitivity (default ~0.7; lower splits more, higher merges) |
 | `--speaker-labels "You,Others"` | rename the source labels |
 
+`source` labels by where the audio came from, so it needs the two sides to be
+separate: two live streams (`--mix` with `--system`/`--app`), or a two-channel
+file. On `-i FILE` it reads channel 1 (left) as `You` and channel 2 (right) as
+`Others`, transcribes each channel on its own, and merges them into one
+time-ordered transcript — so people talking over each other both survive:
+
+```sh
+hark -i call.wav --speakers --speaker-mode source -t call.srt
+```
+
+A mono file carries no such split; `--speaker-mode source` on one is a usage
+error (exit 64) rather than unlabeled output. Use the default
+`--speaker-mode auto` to diarize a mixed recording into `Speaker 1/2…`; `auto`
+treats a stereo file as one recording too, since most stereo is not one speaker
+per channel.
+
+The labels are deterministic, but finding each channel's speech is not: the file
+path runs every channel through the offline diarizer, so `-i FILE
+--speaker-mode source` needs Apple Silicon and the diarizer model, exactly like
+any other `-i --speakers` run. Only live source attribution (`--mix` with
+`--system`/`--app`) is model-free and runs on Intel.
+
 ## Configuration & environment
 
 Most defaults resolve **flag › environment (`$HARK_*`) › config

@@ -138,15 +138,17 @@ enum BatchDiarization {
 
     /// Diarizes `audioPath` and transcribes each speaker span into labeled cues.
     /// `relabel`, when given, overrides every cue's speaker (used to force the
-    /// microphone track to "You" in offline-live mode).
+    /// microphone track to "You" in offline-live mode). `channel` reads one
+    /// channel of the file instead of the mix of all of them.
     static func diarizeToCues(
         audioPath: String, engineName: String, modelFlag: String?, language: String?,
-        translate: Bool, maxSpeakers: Int?, threshold: Double?, relabel: String? = nil
+        translate: Bool, maxSpeakers: Int?, threshold: Double?, relabel: String? = nil,
+        channel: Int? = nil
     ) throws -> [TranscriptCue] {
         // Decode through the shared pipeline, as transcription does: FluidAudio's
         // converter folds channels with AVAudioConverter, which keeps channel 0,
         // so a speaker recorded only on the right channel would diarize as silence.
-        let mono = try AudioPipeline.normalizeFileForWhisper(audioPath)
+        let mono = try AudioPipeline.normalizeFileForWhisper(audioPath, channel: channel)
         defer { try? FileManager.default.removeItem(at: mono) }
         let samples = try AudioConverter().resampleAudioFile(mono)
         guard !samples.isEmpty else { return [] }
@@ -177,6 +179,44 @@ enum BatchDiarization {
                     speaker: relabel ?? segment.speaker))
         }
         return cues
+    }
+
+    /// Source attribution for a two-channel file (`-i FILE --speaker-mode
+    /// source`, PRD §6.7c): channel 0 holds the microphone and channel 1 the
+    /// call, so each channel is read on its own, transcribed as a single
+    /// speaker, labeled by origin, and merged back into one time-ordered
+    /// transcript — the same two-track shape the offline-live path produces.
+    /// Overlapping speech survives, because the two voices never share a track.
+    static func attributeChannels(
+        audioPath: String, engineName: String, modelFlag: String?, language: String?,
+        translate: Bool, threshold: Double?, labels: SpeakerLabels
+    ) throws -> [TranscriptCue] {
+        try requireSourceChannels(AudioPipeline.channelCount(of: audioPath), path: audioPath)
+        func cues(channel: Int, label: String) throws -> [TranscriptCue] {
+            try diarizeToCues(
+                audioPath: audioPath, engineName: engineName, modelFlag: modelFlag,
+                language: language, translate: translate, maxSpeakers: 1, threshold: threshold,
+                relabel: label, channel: channel)
+        }
+        return merge([
+            try cues(channel: 0, label: labels.you),
+            try cues(channel: 1, label: labels.others),
+        ])
+    }
+
+    /// Rejects a file that cannot carry source attribution. Mirrors the live
+    /// path's "source needs two sources" usage error: a mixed single-channel
+    /// recording has nothing to attribute, and with more than two channels
+    /// there is no telling which one is the microphone.
+    static func requireSourceChannels(_ channels: Int, path: String) throws {
+        guard channels == 2 else {
+            throw HarkError.usage("""
+                speaker-mode 'source' attributes the mic vs the call, so on a file it needs \
+                two channels (mic left, call right): '\(path)' has \(channels) \
+                channel\(channels == 1 ? "" : "s"). Use --speaker-mode auto to diarize it \
+                acoustically.
+                """)
+        }
     }
 
     /// Merges cue lists from multiple tracks into one time-ordered transcript.

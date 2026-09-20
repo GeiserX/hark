@@ -81,7 +81,8 @@ They do use on-device CoreML models (FluidAudio, Apple Silicon) that are
 - The VAD model is fetched on the first live transcription (it improves segment
   boundaries). Disable it entirely with `HARK_VAD=0`.
 - The diarization model is fetched the first time you use `--speakers` with
-  acoustic diarization.
+  acoustic diarization, or on any `-i FILE --speakers` run — the file path finds
+  each speaker's (or channel's) speech with it.
 
 Pre-fetch both to avoid a first-run download (e.g. for offline/air-gapped use):
 
@@ -90,8 +91,10 @@ hark models download fluidaudio:vad
 hark models download fluidaudio:diarizer
 ```
 
-On Intel Macs, acoustic diarization is unavailable; diarized modes fall back to
-deterministic `You`/`Others` source attribution (which needs no model).
+On Intel Macs, acoustic diarization is unavailable; a live capture falls back to
+deterministic `You`/`Others` source attribution (which needs no model). A file
+has no such fallback: `-i FILE --speakers` uses the diarizer to find the speech
+in every mode, `--speaker-mode source` included, so on Intel it errors out.
 
 ## Interactive & remote control (`--interactive`, `--remote-control`)
 
