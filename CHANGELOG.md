@@ -28,6 +28,20 @@ All notable changes to Hark are documented here. The format is loosely based on
   taps) every turn from 0.4 s up now survives, the speaker count stays at the
   true two, and no turn the old floor already transcribed changes its words or
   its speaker.
+### Fixed
+- Reading a stereo file threw away the right channel. Everything that folds a
+  file down to mono — transcription, offline diarization, and a transcode to
+  `--channels 1` — asked `AVAudioConverter` for the channel change, and it keeps
+  channel 0 instead of mixing, so an interview recorded with one speaker per
+  channel came back as half a conversation and a right-channel-only file
+  transcribed as silence. hark now averages the channels itself before the
+  conversion; a file with identical channels keeps its level, and averaging
+  (rather than summing) cannot clip. An anti-phase stereo file (L = -R) now
+  folds to silence, as any mono fold does. Recorded audio is unchanged, byte
+  for byte. Live transcription changes on one path: without the Silero VAD —
+  Intel, `--no-vad`, or the model failing to load — segments reach the engine
+  in the capture format, which is stereo for system capture, through this same
+  decode, so live transcription now hears both channels too.
 
 ## [0.4.3] - 2026-09-17
 
