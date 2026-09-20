@@ -303,20 +303,6 @@
 - [x] Gated `say` ground-truth test (`SayDiarizationTests`, `HARK_TEST_DIARIZE=1`): single speaker stays one, two distinct voices separate with a stable 1:1 mapping — validates the zero-config default end-to-end (minus TCC capture)
 - [ ] Real-call e2e (TCC capture front-end) remains on the pending-live list; streaming RTF measured ≪ 1 (≈0.01) via the harness
 
-### Phase 8.9 — Separate-track audio output (`--tracks stereo`, PRD §6.7d, Open Q8)
-
-> The mic/system separation existed only inside the process: the saved `-a` file was
-> the sum, with identical left and right, so `hark -i call.wav --speakers` could only
-> ever say `Speaker N`. Resolves PRD Open Question 8 as L/R channels in the one file.
-
-- [x] `--tracks mixed|stereo` (default `mixed`, byte-identical to today) + config key `tracks`, `$HARK_TRACKS`, and the remote-control `tracks` field
-- [x] `StereoTrackWriter` pairs the two per-source streams (common prefix, `drainMix`-shaped) and interleaves them mic-left / system-right via `interleaveAsStereo`; two tagged `TrackSink` adapters feed it, since `CaptureEngine` calls the bare `AudioSink.write`. Each source is folded to mono by averaging its channels (a mono mic upmixed across the tap layout comes back exactly)
-- [x] Pause realignment: pause is applied per chunk, so it can drop one source's chunk and keep the other's; `CaptureControl.pauseCount` lets the writer drop both unpaired tails at the boundary instead of running L/R a chunk apart for the rest of the capture
-- [x] `stereo` refuses rather than downgrades: it needs two sources (`--mix` + `--system`/`--app`/`--exclude-app`) and two channels (not `-c 1`)
-- [x] Status block gains a `tracks` row when the layout is `stereo`
-- [x] Tests: per-depth interleave (16/24/32), common-prefix pairing, single finalize, tag routing, pause realignment, engine e2e incl. `--duration`, resolution precedence and both usage errors, remote `tracks` field
-- [x] Verified with the binary on a real capture (two independent players, one tapped by `--app` and one fed to a loopback input read as the mic): the opposite channel measures **−inf dBFS** in each speech region — ch1 −22.7 dB while ch0 is silent, then ch0 −16.4 dB while ch1 is silent — where today's mixed file has L−R = 0 exactly. Splitting the file with `ffmpeg channelsplit` gives two clean single-side transcripts from the one recording. `--duration` lands on 12.000 s, `--split duration=5` yields 5 + 5 + 2 s two-channel chunks, `-a -` streams it, and a paused remote session gaps both channels together. `--tracks mixed` is byte-identical to the base branch on every reproducible path (WAV/FLAC transcode, and a live `-a -` capture); m4a is not bit-reproducible on this machine even between two builds of the *same* source, so it is compared by decoded payload
-
 ## Phase 9: Working directory for artifacts (PRD Feature 20 / §6.1)
 
 > A git-`-C`-style base directory for resolving **relative** artifact paths,
@@ -513,7 +499,7 @@
 - [x] `RemoteSessionManager` tracks **worker liveness** (`workerRunning`) separately from session state; `begin` throws the new `AgentError.finishing` → `409` with a distinct message, so a start can never queue behind a wedged worker and silently record nothing
 - [x] Stop-timeout watchdog: `stop()` arms `$HARK_STOP_TIMEOUT` (default 10 s) via an injectable scheduler; on expiry the session becomes `failed` with an actionable message (wedged stream + the System Audio Recording grant + restart hint) so `GET /status` stops lying. A late `finish` releases the worker slot but keeps the client-visible verdict
 - [x] Bounded capture teardown (`CaptureEngine.runBounded`, `$HARK_TEARDOWN_TIMEOUT`, default 5 s, 0 = old behavior): a `stopping` flag drops late IO chunks, `session.stop()` and the write drain are time-bounded, and the sinks are **finalized anyway** so the audio captured so far stays playable instead of being lost to the hang. Fixes the foreground `--capture-backend coreaudio` symptom too
-- [x] Follow-up (Unreleased): the same three guards now cover the separated `--speakers` tracks, which were written straight from the audio callback — they hop to the capture IO queue, so late chunks are dropped, pause is read at the same point as for the mixed stream, and each track gets its own `--duration` budget (measured: a 2 s capture wrote 2.005 s of mic and up to 2.08 s of system audio before, exactly 2 s after)
+- [x] Follow-up (Unreleased): the same three guards now cover the separated `--speakers` tracks, which were written straight from the audio callback — they hop to the capture IO queue, so late chunks are dropped, pause is read at the same point as for the mixed stream, and each track gets its own `--duration` budget (measured: before, with no budget on those tracks, nine 2 s captures ran long by 3–8 ms on mic and 80–240 ms on system audio, bounded only by how long teardown took; after, every track is exactly 2 s)
 - [x] Agent shutdown notes a still-finishing worker in the service log instead of exiting silently
 - [x] Tests: stop-timeout → `failed` (manual scheduler, no sleeps), inert on a clean stop, wedged worker refuses new sessions, late finish keeps the verdict; end-to-end `WedgedStopSession` proving `run()` returns and keeps the audio; `runBounded` semantics — 325 tests, 79 suites green
 - [x] Verified with the binary: mic / coreaudio / sckit / `--mix` captures all still finalize in ~1 s over their duration; with `HARK_STOP_TIMEOUT=0.001` a real agent session flips to `failed` with the message in `/status` and the log, and the slot is released once the worker returns
