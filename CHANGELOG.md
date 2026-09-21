@@ -29,6 +29,17 @@ All notable changes to Hark are documented here. The format is loosely based on
   VAD and the amplitude (`--no-vad`) paths honour them. The pause must be 0–5 s,
   the window 1–60 s and greater than the pause. Defaults are unchanged.
 ### Fixed
+- `POST /start` said a recording had begun before it had. The session was
+  registered, the answer went out, and only then were the sources started, so
+  everything said in between was lost. With `--live-streaming` and a recognizer
+  model not yet in memory that window was 12.7 s, measured on the first streamed
+  call after a reboot, and the opening of the call was simply missing from both
+  the audio and the transcript. The answer now waits for the capture to be open, and
+  a start that fails on the way up returns its own error instead of a `201` for a
+  recording that never happened. Both the start answer and `GET /status` carry
+  `capturing`, and the wait gives up at 60 s and answers with `capturing: false`
+  rather than holding a client forever on a first-ever model download.
+
 - A `--system --mix` recording no longer loses the system side silently. On a
   real 71-minute call the tap went to exact digital silence twice while the
   call kept playing and hark kept reporting `recording`: with the microphone
@@ -77,8 +88,6 @@ All notable changes to Hark are documented here. The format is loosely based on
   to attribute (mono, or more than two) is now a usage error naming the channel
   count, instead of being ignored. It used to produce a `Speaker 1/2…`
   transcript that looked labeled but told you nothing about who was who.
-
-### Fixed
 - Reading a stereo file threw away the right channel. Everything that folds a
   file down to mono — transcription, offline diarization, and a transcode to
   `--channels 1` — asked `AVAudioConverter` for the channel change, and it keeps

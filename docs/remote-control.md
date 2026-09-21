@@ -133,7 +133,7 @@ curl -s http://127.0.0.1:8473/status
   "agent": { "version": "0.1.0", "address": "127.0.0.1:8473" },
   "session": {
     "id": "28D1DBD7-…",
-    "state": "recording",
+    "state": "recording", "capturing": true,
     "muted": false,
     "elapsed": 12.4,
     "audio": "meeting.m4a",
@@ -146,8 +146,10 @@ curl -s http://127.0.0.1:8473/status
 ```
 
 `session` is omitted before the first recording. `state` is one of `recording`,
-`paused`, `stopped`, `failed`. `muted` reflects the microphone mute toggle (see
-`/mute`).
+`paused`, `stopped`, `failed`. `capturing` says whether the capture is open:
+`state` says `recording` from the moment a start is accepted, which is before the
+sources are started, so `capturing` is the one to trust for "anything said now is
+being recorded". `muted` reflects the microphone mute toggle (see `/mute`).
 
 `partial` is the open transcript line of a `--live-streaming` capture, meaning
 text the recognizer has produced that no pause has closed yet. It appears only
@@ -193,10 +195,20 @@ curl -s -X POST http://127.0.0.1:8473/start \
 ```
 
 ```json
-{ "id": "28D1DBD7-…", "state": "recording", "muted": false, "audio": "meeting.m4a", "transcript": "meeting.srt" }
+{ "id": "28D1DBD7-…", "state": "recording", "muted": false, "audio": "meeting.m4a", "transcript": "meeting.srt",
+  "capturing": true }
 ```
 
 Relative paths resolve under the agent's working directory (`-C` at launch).
+
+**The answer waits for the capture.** Opening the sources takes time, and with
+`--live-streaming` a recognizer model that is not in memory yet takes a good deal
+more: 12.7 s was measured on the first streamed call after a reboot. The answer
+comes once the capture is open, so a client that starts talking the moment it sees
+the `201` is heard from its first word. A start that fails on the way up returns its own error
+instead of a `201` for a recording that never happened. The wait gives up after
+60 s and answers anyway with `capturing: false`, which a first-ever model download
+can reach; watch `capturing` in `GET /status` for it to turn true.
 
 **Existing files.** The agent can't ask, so it defaults to `ifExists: "unique"`:
 if `meeting.m4a` is already there, the session records `meeting-1.m4a` (and

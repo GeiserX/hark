@@ -262,6 +262,9 @@ struct CaptureEngine {
             throw mapped(error)
         }
         Log.verbose("recording started")
+        // Everything above had to happen before a single sample could be written,
+        // and on the remote-control path a client is waiting to be told it may talk.
+        control?.markCapturing()
 
         let watcher = SignalWatcher()
         watcher.watch([SIGINT, SIGTERM]) {

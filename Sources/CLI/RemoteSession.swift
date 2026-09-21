@@ -50,6 +50,11 @@ final class RemoteSessionManager: @unchecked Sendable {
         /// `current()` from the live capture control. Never persisted with the
         /// snapshot: a stopped session has no open line.
         var partial: PartialLine? = nil
+        /// Whether the capture is open yet. `state` goes to `recording` the moment
+        /// the session is registered, which is before the sources are started and
+        /// before a cold recognizer model is loaded, so this is the one to watch to
+        /// know that what is said now will be recorded.
+        var capturing: Bool = false
     }
 
     /// Schedules the stop-timeout check. Injectable so tests drive it without
@@ -96,6 +101,7 @@ final class RemoteSessionManager: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var snap = snapshot else { return nil }
         if snap.state == .recording { snap.partial = control?.partialLine }
+        snap.capturing = control?.isCapturing ?? snap.capturing
         if let live = control?.callAudio { snap.callAudio = live }
         return snap
     }
