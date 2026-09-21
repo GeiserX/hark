@@ -18,7 +18,12 @@ All notable changes to Hark are documented here. The format is loosely based on
   `Speaker N`. On a 26-turn two-voice clip (clean, and again with room noise and
   taps) every turn from 0.4 s up now survives, the speaker count stays at the
   true two, and no turn the old floor already transcribed changes its words or
-  its speaker.
+  its speaker. A span shorter than the recognizer's own floor is now padded with
+  trailing silence instead of being handed over short or skipped, so a real
+  quarter-second answer is transcribed rather than aborting the whole run with
+  "Must be at least 300ms of 16kHz audio" and writing no transcript. The floor
+  is asked from the backend (`minimumAudioSeconds`), so it tracks FluidAudio's
+  own constant and stays zero for whisper, apple and whisperkit.
 
 ## [0.4.3] - 2026-09-17
 

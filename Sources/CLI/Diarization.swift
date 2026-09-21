@@ -176,24 +176,50 @@ enum BatchDiarization {
             engineName: engineName, modelFlag: modelFlag, language: language, translate: translate)
         defer { backend.shutdown() }
 
+        let minimumSamples = Int((backend.minimumAudioSeconds * 16000).rounded(.up))
+
         var cues: [TranscriptCue] = []
         for segment in segments {
             let startSample = max(0, Int(segment.start * 16000))
             let endSample = min(samples.count, Int(segment.end * 16000))
-            guard endSample - startSample >= 1600 else { continue }  // < 0.1 s: skip
+            guard
+                let slice = Self.samplesForTranscription(
+                    samples, from: startSample, to: endSample,
+                    skipBelowSamples: 1600, minimumSamples: minimumSamples)
+            else { continue }
 
-            let wav = try writeWav16kMono(Array(samples[startSample..<endSample]))
+            let wav = try writeWav16kMono(slice)
             defer { try? FileManager.default.removeItem(at: wav) }
             let text = try backend.transcribe(
                 wavFile: wav, language: language, translate: translate, format: .txt)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { continue }
+            guard !text.isEmpty, !LiveTranscriber.isNonSpeech(text) else { continue }
             cues.append(
                 TranscriptCue(
                     start: segment.start, end: segment.end, text: text,
                     speaker: relabel ?? segment.speaker))
         }
         return cues
+    }
+
+    /// Samples to hand the recognizer for a diarized span, or nil when the span is
+    /// too short to be speech at all (under `skipBelowSamples`, the existing 0.1 s
+    /// bound). Anything longer is padded with trailing zeros up to `minimumSamples`,
+    /// the engine's floor, so a real quarter-second answer is transcribed instead of
+    /// failing the whole run. Cue timings still come from the diarized span, so the
+    /// padding never reaches the transcript.
+    static func samplesForTranscription(
+        _ samples: [Float], from start: Int, to end: Int,
+        skipBelowSamples: Int, minimumSamples: Int
+    ) -> [Float]? {
+        let lower = max(0, min(start, samples.count))
+        let upper = max(lower, min(end, samples.count))
+        guard upper - lower >= skipBelowSamples else { return nil }
+        var slice = Array(samples[lower..<upper])
+        if slice.count < minimumSamples {
+            slice.append(contentsOf: [Float](repeating: 0, count: minimumSamples - slice.count))
+        }
+        return slice
     }
 
     /// Merges cue lists from multiple tracks into one time-ordered transcript.
