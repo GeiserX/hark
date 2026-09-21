@@ -339,6 +339,7 @@ private struct ActionResponse: Encodable {
     }
 }
 
+/// The `GET /status` body. Internal (not private) so tests can encode it.
 struct StatusResponse: Encodable {
     struct Agent: Encodable {
         let version: String
@@ -352,6 +353,10 @@ struct StatusResponse: Encodable {
         let audio: String?
         let transcript: String?
         let error: String?
+        /// The open transcript line, present only while a `--live-streaming`
+        /// capture is recording. Optional, so with streaming off the key is
+        /// absent and the payload is byte-identical to before.
+        let partial: PartialLine?
         let callAudio: CallAudio?
     }
     /// Whether the call's audio (the system tap) is still being heard.
@@ -370,6 +375,7 @@ struct StatusResponse: Encodable {
                 id: $0.id, state: $0.state.rawValue, muted: $0.muted,
                 elapsed: Date().timeIntervalSince($0.startedAt),
                 audio: $0.audio, transcript: $0.transcript, error: $0.error,
+                partial: $0.partial,
                 callAudio: $0.callAudio.map {
                     CallAudio(
                         state: $0.state.rawValue,

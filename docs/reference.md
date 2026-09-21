@@ -166,6 +166,25 @@ shorter segments with less context for the engine. The window must be greater
 than the pause. Both apply to the VAD path and to the amplitude fallback
 (`--no-vad`).
 
+### Streaming a live transcript
+
+`--live-streaming` transcribes the capture continuously instead of one finished
+window at a time. Text appears about 2.5 s behind the audio instead of 9 to 12 s.
+The open line grows in place until `--segment-pause` closes it, or
+`--segment-window` cuts it. Closed lines go into the transcript file exactly as
+before. The open line is written nowhere, and with `--remote-control` the agent
+serves it as `session.partial` on [`GET /status`](remote-control.md).
+
+Off by default. Turn it on per run, or with `$HARK_LIVE_STREAMING` or the
+`live-streaming` config key. It needs Apple Silicon and covers English, Spanish,
+French, Italian, Portuguese and German with one model, downloaded on first use
+(612 MB; pre-fetch it with `hark models download fluidaudio:streaming-asr`). It
+cannot translate, and combining it with `-i FILE` is a usage error, because a file
+is transcribed in one pass. Emitted text is never corrected; the open line only
+grows. On Intel, in another language, or with `--diarize-engine offline`, hark
+prints why it cannot stream and runs the segmented path instead, so no recording
+depends on it.
+
 ## Speaker labels
 
 | Flag | Meaning |
@@ -226,6 +245,7 @@ Every setting has a flag, a `$HARK_*` env var, and a config key. The env var is
 | `vad-threshold` | `--vad-threshold` | `0.5` |
 | `segment-pause` | `--segment-pause` | `0.7` |
 | `segment-window` | `--segment-window` | `12` |
+| `live-streaming` | `--live-streaming`/`--no-live-streaming` | `false` |
 | `gain` | `--gain`/`--no-gain` | `true` |
 | `speakers` | `--speakers`/`--no-speakers` | `false` |
 | `speaker-mode` | `--speaker-mode` | `auto` |

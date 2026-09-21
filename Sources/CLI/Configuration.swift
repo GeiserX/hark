@@ -35,6 +35,7 @@ struct Configuration: Codable, Equatable {
     var vadThreshold: Double?
     var segmentPause: Double?
     var segmentWindow: Double?
+    var liveStreaming: Bool?
     var gain: Bool?
 
     // Speaker recognition
@@ -62,6 +63,7 @@ struct Configuration: Codable, Equatable {
         case vadThreshold = "vad-threshold"
         case segmentPause = "segment-pause"
         case segmentWindow = "segment-window"
+        case liveStreaming = "live-streaming"
         case gain
         case speakers
         case speakerMode = "speaker-mode"
@@ -171,6 +173,9 @@ struct Configuration: Codable, Equatable {
         TypedSetting(.segmentWindow, .double, "12", \.segmentWindow,
             parse: { try ConfigKey.parseSegmentWindow($0, .segmentWindow) }, format: ConfigKey.formatNumber,
             summary: "Seconds of unbroken speech after which a segment is cut anyway."),
+        TypedSetting(.liveStreaming, .bool, "false", \.liveStreaming,
+            parse: { try ConfigKey.parseBool($0, .liveStreaming) }, format: ConfigKey.formatBool,
+            summary: "Live: stream partial text with the streaming recognizer instead of one line per pause."),
         TypedSetting(.gain, .bool, "true", \.gain,
             parse: { try ConfigKey.parseBool($0, .gain) }, format: ConfigKey.formatBool,
             summary: "Boost quiet segments before transcription (recording unaffected)."),

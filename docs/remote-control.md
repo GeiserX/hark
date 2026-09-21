@@ -139,6 +139,7 @@ curl -s http://127.0.0.1:8473/status
     "audio": "meeting.m4a",
     "transcript": "meeting.srt",
     "error": null,
+    "partial": { "text": "so the plan is to", "start": 809.8, "speaker": "Speaker 2" },
     "callAudio": { "state": "ok", "silentFor": 0, "restarts": 0 }
   }
 }
@@ -147,6 +148,14 @@ curl -s http://127.0.0.1:8473/status
 `session` is omitted before the first recording. `state` is one of `recording`,
 `paused`, `stopped`, `failed`. `muted` reflects the microphone mute toggle (see
 `/mute`).
+
+`partial` is the open transcript line of a `--live-streaming` capture, meaning
+text the recognizer has produced that no pause has closed yet. It appears only
+while `state` is `recording` and streaming is on, and the key is absent
+otherwise. Each poll replaces it rather than adding to it, so a client shows one
+growing line and reads the closed lines from the transcript file. `start` is
+seconds into the capture. This is the only transcript content the agent ever
+serves, and it is stored nowhere.
 
 `callAudio` says whether the system-audio side of a tap + microphone capture is
 still being heard. It is present only for those captures (Core Audio backend
@@ -227,6 +236,7 @@ replace, or `"error"` to get a `409` instead. `"ask"` is rejected (`400`).
 | `speakerThreshold` | number | `--speaker-threshold` |
 | `vad` / `vadThreshold` / `gain` | bool/number/bool | `--vad` / `--vad-threshold` / `--gain` |
 | `segmentPause` / `segmentWindow` | number | `--segment-pause` / `--segment-window` (live segment timing, seconds) |
+| `liveStreaming` | bool | `--live-streaming` (stream partial text instead of one line per pause) |
 
 ### `POST /pause`, `/resume`, `/mute`, `/unmute`, `/stop`
 

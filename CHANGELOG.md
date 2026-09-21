@@ -7,6 +7,19 @@ All notable changes to Hark are documented here. The format is loosely based on
 ## [Unreleased]
 
 ### Added
+- Live transcription can now stream. `--live-streaming` (also
+  `$HARK_LIVE_STREAMING`, config key `live-streaming`, `liveStreaming` on
+  `POST /start`) transcribes the capture continuously through the Nemotron
+  multilingual streaming recognizer instead of one window per pause. Text appears
+  about 2.5 s behind the audio instead of 9 to 12 s, and the open line grows in
+  place until `--segment-pause` closes it. Closed lines go into the transcript
+  exactly as before. The open line is written nowhere; the remote-control agent
+  serves it as `session.partial` on `GET /status`. Apple Silicon, with English,
+  Spanish, French, Italian, Portuguese and German in one model (612 MB on first
+  use, pre-fetch with `hark models download fluidaudio:streaming-asr`). It cannot
+  translate, `--diarize-engine offline` ignores it, and pairing it with `-i FILE`
+  is a usage error. Off by default: where it cannot run, hark prints why and the
+  segmented path runs unchanged, so no recording depends on it.
 - Live segmentation timing is configurable: `--segment-pause` (seconds of
   silence that end a transcript segment, default `0.7`) and `--segment-window`
   (seconds of unbroken speech after which a segment is cut anyway, default
@@ -41,7 +54,12 @@ All notable changes to Hark are documented here. The format is loosely based on
   `Speaker N`. On a 26-turn two-voice clip (clean, and again with room noise and
   taps) every turn from 0.4 s up now survives, the speaker count stays at the
   true two, and no turn the old floor already transcribed changes its words or
-  its speaker.
+  its speaker. A span shorter than the recognizer's own floor is now padded with
+  trailing silence instead of being handed over short or skipped, so a real
+  quarter-second answer is transcribed rather than aborting the whole run with
+  "Must be at least 300ms of 16kHz audio" and writing no transcript. The floor
+  is asked from the backend (`minimumAudioSeconds`), so it tracks FluidAudio's
+  own constant and stays zero for whisper, apple and whisperkit.
 - `--speaker-mode source` now works on a two-channel file. An interview or call
   recorded with your microphone on the left channel and the other side on the
   right is transcribed one channel at a time and labeled by origin —

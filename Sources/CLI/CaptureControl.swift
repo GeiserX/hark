@@ -17,6 +17,12 @@ final class CaptureControl: @unchecked Sendable {
     private var pauses: UInt64 = 0
     private var onStop: (() -> Void)?
     private var callAudioSource: (@Sendable () -> TapSilenceMonitor.Status)?
+    /// The open (not yet finalized) transcript line per capture source, with a
+    /// monotonic `seq` so the newest one can be identified. Only
+    /// `--live-streaming` writes here; with streaming off the map stays empty and
+    /// `GET /status` is byte-identical to before.
+    private var partials: [String: (line: PartialLine, seq: UInt64)] = [:]
+    private var partialSeq: UInt64 = 0
 
     /// True while capture is paused (the I/O path drops chunks).
     var isPaused: Bool {
@@ -136,6 +142,34 @@ final class CaptureControl: @unchecked Sendable {
         return true
     }
 
+    /// Publishes (or, with nil, clears) the open transcript line for one capture
+    /// source. A `--mix` capture streams two sources, so the newest line wins in
+    /// `partialLine` rather than the two flickering against each other. Ignored
+    /// once stopped, so a late decode can't resurrect a line after the recording
+    /// ended.
+    func setPartial(_ line: PartialLine?, for source: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !stopped else {
+            partials.removeValue(forKey: source)
+            return
+        }
+        guard let line else {
+            partials.removeValue(forKey: source)
+            return
+        }
+        partialSeq += 1
+        partials[source] = (line, partialSeq)
+    }
+
+    /// The most recently published open line across all sources, or nil when
+    /// every source's line has closed.
+    var partialLine: PartialLine? {
+        lock.lock()
+        defer { lock.unlock() }
+        return partials.values.max(by: { $0.seq < $1.seq })?.line
+    }
+
     /// Requests a graceful stop and wakes the capture wait loop (idempotent).
     func stop() {
         lock.lock()
@@ -146,6 +180,7 @@ final class CaptureControl: @unchecked Sendable {
             stopped = true
             paused = false
             muted = false
+            partials.removeAll()
             handler = onStop
         }
         lock.unlock()

@@ -105,7 +105,9 @@ struct ModelsList: ParsableCommand {
         }
 
         func languages(_ m: DownloadableModel) -> String {
-            if m.engine == "fluidaudio" { return "speaker pipeline" }
+            if m.engine == "fluidaudio" {
+                return m.modelId == "streaming-asr" ? "multilingual (streaming)" : "speaker pipeline"
+            }
             return m.isEnglishOnly ? "english-only" : "multilingual"
         }
         let entries = ModelCatalog.available().map {
@@ -208,6 +210,7 @@ enum ModelDownloader {
         case "fluidaudio":
             switch spec.modelId {
             case "vad": try FluidVadClassifier.downloadModel()
+            case "streaming-asr": try NemotronStreamingModels.download()
             case "streaming-diarizer": try EENDStreamingDiarizer.download()
             default: try SpeakerDiarizer.download()
             }

@@ -308,6 +308,14 @@ struct Hark: ParsableCommand {
         """)
     var useVad: Bool?
 
+    @Flag(name: .customLong("live-streaming"), inversion: .prefixedNo, help: """
+        Live: transcribe continuously with the streaming multilingual model \
+        instead of one line per pause. Text appears about 2.5 s behind the audio \
+        and the open line grows in place; default off; Apple Silicon; \
+        en/es/fr/it/pt/de; cannot translate. Or $HARK_LIVE_STREAMING / hark config.
+        """)
+    var liveStreaming: Bool?
+
     @Flag(name: .customLong("gain"), inversion: .prefixedNo, help: """
         Peak-normalize each segment before the engine to recognize quiet captures \
         (default on; the recording is unaffected). --no-gain disables. Or \
@@ -530,6 +538,10 @@ struct Hark: ParsableCommand {
         if let segmentPause, let segmentWindow, segmentWindow <= segmentPause {
             throw ValidationError("--segment-window must be greater than --segment-pause.")
         }
+        if liveStreaming == true, input != nil {
+            throw ValidationError(
+                "--live-streaming applies to live capture; -i FILE is transcribed in one pass.")
+        }
 
         // Speaker recognition value formats (flag-level). Cross-cutting checks
         // that depend on the resolved mode (which may come from env/config) —
@@ -720,11 +732,20 @@ struct Hark: ParsableCommand {
         // impossible `--tracks stereo` fails immediately rather than mid-meeting.
         let trackLayout = try resolveTrackLayout(settings: settings, outputs: outputs)
 
+        // Opt-in streaming transcription (`--live-streaming`): loaded here, before
+        // any permission prompt, so a missing model or an unsupported language
+        // fails (or falls back) while nothing is recording yet. nil means the
+        // segmented path runs, exactly as before. Without a transcript output
+        // there is nothing to stream into, so the models are not loaded at all.
+        let streaming = makeStreamingModels(
+            settings: settings, plan: speakerPlan, hasTranscript: outputs.transcript != nil)
+
         // Fail fast on an unusable transcription engine before touching audio
         // permissions or starting capture: whisper resolves its binary+model
         // (and warns on a .en/language mismatch); apple checks Speech
-        // authorization + locale, so its prompt happens before recording.
-        if outputs.transcript != nil {
+        // authorization + locale, so its prompt happens before recording. The
+        // streaming path never loads that engine, so it is not preflighted.
+        if outputs.transcript != nil, streaming == nil {
             try TranscriptionEngine.preflight(
                 engineName: settings.engine, modelFlag: model,
                 language: settings.language, translate: settings.translate)
@@ -800,21 +821,23 @@ struct Hark: ParsableCommand {
             try runSourceAttributedLive(
                 outputs: outputs, settings: settings, captureEngine: captureEngine,
                 session: session, format: format, mixedSinks: sinks, trackSinks: trackSinks,
-                labels: labels, systemDiarizer: nil, transcriptLog: transcriptLog)
+                labels: labels, systemDiarizer: nil, streaming: streaming,
+                transcriptLog: transcriptLog)
             return
         case .sourceDiarized(let labels, .streaming):
             let diarizer = try makeStreamingDiarizer(settings: settings)
             try runSourceAttributedLive(
                 outputs: outputs, settings: settings, captureEngine: captureEngine,
                 session: session, format: format, mixedSinks: sinks, trackSinks: trackSinks,
-                labels: labels, systemDiarizer: diarizer, transcriptLog: transcriptLog)
+                labels: labels, systemDiarizer: diarizer, streaming: streaming,
+                transcriptLog: transcriptLog)
             return
         case .singleDiarized(.streaming):
             let diarizer = try makeStreamingDiarizer(settings: settings)
             try runSingleDiarizedLive(
                 outputs: outputs, settings: settings, captureEngine: captureEngine,
                 session: session, format: format, mixedSinks: sinks, trackSinks: trackSinks,
-                diarizer: diarizer, transcriptLog: transcriptLog)
+                diarizer: diarizer, streaming: streaming, transcriptLog: transcriptLog)
             return
         case .sourceDiarized(let labels, .offline):
             try runOfflineLive(
@@ -830,20 +853,35 @@ struct Hark: ParsableCommand {
             return
         }
 
-        var liveTranscriber: LiveTranscriber?
+        var liveTranscriber: LiveTranscriptionSink?
         if let transcriptDest = outputs.transcript {
-            let transcriber = try LiveTranscriber(
-                destination: transcriptDest,
-                transcriptFormat: transcriptFormat(for: transcriptDest),
-                engineName: settings.engine, modelFlag: model, language: settings.language,
-                translate: settings.translate,
-                captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-                useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
-                // Interactive: a file destination never reaches the UI, so echo
-                // captions to the screen too (PRD §6.9).
-                screenEcho: interactive && transcriptDest.isFile,
-                transcriptLog: transcriptLog,
-                pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
+            // Interactive: a file destination never reaches the UI, so echo
+            // captions to the screen too (PRD §6.9).
+            let echoToScreen = interactive && transcriptDest.isFile
+            let transcriber: LiveTranscriptionSink
+            if let streaming {
+                transcriber = StreamingLiveTranscriber(
+                    recognizer: try streaming.makeRecognizer(),
+                    writer: try LiveTranscriptWriter(
+                        destination: transcriptDest, format: transcriptFormat(for: transcriptDest)),
+                    ownsWriter: true, speaker: nil, resolver: nil, captureFormat: format,
+                    control: captureEngine.control, sourceKey: "single",
+                    gapSeconds: settings.segmentPause, maxLineSeconds: settings.segmentWindow,
+                    labelName: "live transcript -> \(transcriptDest.label)",
+                    screenEcho: echoToScreen, transcriptLog: transcriptLog)
+            } else {
+                transcriber = try LiveTranscriber(
+                    destination: transcriptDest,
+                    transcriptFormat: transcriptFormat(for: transcriptDest),
+                    engineName: settings.engine, modelFlag: model, language: settings.language,
+                    translate: settings.translate,
+                    captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
+                    useVad: settings.useVad, vadThreshold: settings.vadThreshold,
+                    useGain: settings.useGain,
+                    screenEcho: echoToScreen,
+                    transcriptLog: transcriptLog,
+                    pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
+            }
             sinks.append(transcriber)
             liveTranscriber = transcriber
             if !interactive && externalControl == nil && outputs.audio == nil && duration == nil {
@@ -935,6 +973,46 @@ struct Hark: ParsableCommand {
         return .stereo
     }
 
+    /// Whether `--live-streaming` has anything to do: it is on, and there is a
+    /// transcript output for the closed lines to go into. `hark -o audio.opus`
+    /// with `live-streaming true` in the config must not pull a 612 MB model it
+    /// would never feed. Pure, for testing.
+    static func streamingRequested(settings: ResolvedSettings, hasTranscript: Bool) -> Bool {
+        settings.liveStreaming && hasTranscript
+    }
+
+    /// Loads the shared streaming ASR models when `--live-streaming` is on, or
+    /// returns nil so the segmented path runs unchanged. nil is always a valid
+    /// answer: streaming is opt-in and must never cost a recording.
+    private func makeStreamingModels(
+        settings: ResolvedSettings, plan: LivePlan, hasTranscript: Bool
+    ) -> NemotronStreamingModels? {
+        guard Self.streamingRequested(settings: settings, hasTranscript: hasTranscript) else {
+            return nil
+        }
+        // The offline diarizer writes the whole transcript at stop from recorded
+        // WAVs, so there is no live line for a streaming recognizer to feed.
+        switch plan {
+        case .sourceDiarized(_, .offline), .singleDiarized(.offline):
+            Log.notice("""
+                live streaming has no effect with --diarize-engine offline, \
+                which writes the transcript at stop
+                """)
+            return nil
+        default:
+            break
+        }
+        do {
+            return try NemotronStreamingModels.load(language: settings.language)
+        } catch let error as HarkError {
+            Log.notice("live streaming unavailable (\(error.message)); using the segmented path")
+            return nil
+        } catch {
+            Log.notice("live streaming unavailable (\(error)); using the segmented path")
+            return nil
+        }
+    }
+
     /// Loads the streaming EEND diarizer for the system/single stream, or returns
     /// nil (with a notice) if it can't load — callers fall back to a fixed label.
     private func makeStreamingDiarizer(settings: ResolvedSettings) throws -> EENDStreamingDiarizer? {
@@ -954,7 +1032,8 @@ struct Hark: ParsableCommand {
         outputs: ResolvedOutputs, settings: ResolvedSettings, captureEngine: CaptureEngine,
         session: CaptureSession, format: PCMFormat, mixedSinks: [AudioSink],
         trackSinks: [(CaptureSource, AudioSink)], labels: SpeakerLabels,
-        systemDiarizer: EENDStreamingDiarizer?, transcriptLog: TranscriptLog? = nil
+        systemDiarizer: EENDStreamingDiarizer?, streaming: NemotronStreamingModels?,
+        transcriptLog: TranscriptLog? = nil
     ) throws {
         guard let transcriptDest = outputs.transcript else {
             throw HarkError.usage("""
@@ -965,28 +1044,54 @@ struct Hark: ParsableCommand {
 
         let writer = try LiveTranscriptWriter(
             destination: transcriptDest, format: transcriptFormat(for: transcriptDest))
-        let base = try TranscriptionEngine.makeLive(
-            engineName: settings.engine, modelFlag: model, language: settings.language,
-            quiet: !Log.isVerbose)
-        let backend = SerializedBackend(base)
-
         // Interactive: a file destination never reaches the UI, so each side
         // echoes its labeled captions to the screen too (PRD §6.9).
         let echoToScreen = interactive && transcriptDest.isFile
-        let micTranscriber = LiveTranscriber(
-            sharedWriter: writer, sharedBackend: backend, speaker: labels.you,
-            language: settings.language, translate: settings.translate,
-            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
-            screenEcho: echoToScreen, transcriptLog: transcriptLog,
-            pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
-        let systemTranscriber = LiveTranscriber(
-            sharedWriter: writer, sharedBackend: backend, speaker: labels.others,
-            resolver: systemDiarizer, language: settings.language, translate: settings.translate,
-            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
-            screenEcho: echoToScreen, transcriptLog: transcriptLog,
-            pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
+        // Streaming never also loads the whole-file engine: each stream gets its
+        // own recognizer over one shared model set instead.
+        let backend: SerializedBackend?
+        let micTranscriber: LiveTranscriptionSink
+        let systemTranscriber: LiveTranscriptionSink
+        if let streaming {
+            backend = nil
+            micTranscriber = StreamingLiveTranscriber(
+                recognizer: try streaming.makeRecognizer(), writer: writer, ownsWriter: false,
+                speaker: labels.you, resolver: nil, captureFormat: format,
+                control: captureEngine.control, sourceKey: "mic",
+                gapSeconds: settings.segmentPause, maxLineSeconds: settings.segmentWindow,
+                labelName: "live transcript [\(labels.you)]", screenEcho: echoToScreen,
+                transcriptLog: transcriptLog)
+            systemTranscriber = StreamingLiveTranscriber(
+                recognizer: try streaming.makeRecognizer(), writer: writer, ownsWriter: false,
+                speaker: labels.others, resolver: systemDiarizer, captureFormat: format,
+                control: captureEngine.control, sourceKey: "system",
+                gapSeconds: settings.segmentPause, maxLineSeconds: settings.segmentWindow,
+                labelName: "live transcript [\(labels.others)]", screenEcho: echoToScreen,
+                transcriptLog: transcriptLog)
+        } else {
+            let shared = SerializedBackend(
+                try TranscriptionEngine.makeLive(
+                    engineName: settings.engine, modelFlag: model, language: settings.language,
+                    quiet: !Log.isVerbose))
+            backend = shared
+            micTranscriber = LiveTranscriber(
+                sharedWriter: writer, sharedBackend: shared, speaker: labels.you,
+                language: settings.language, translate: settings.translate,
+                captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
+                useVad: settings.useVad, vadThreshold: settings.vadThreshold,
+                useGain: settings.useGain,
+                screenEcho: echoToScreen, transcriptLog: transcriptLog,
+                pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
+            systemTranscriber = LiveTranscriber(
+                sharedWriter: writer, sharedBackend: shared, speaker: labels.others,
+                resolver: systemDiarizer, language: settings.language,
+                translate: settings.translate,
+                captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
+                useVad: settings.useVad, vadThreshold: settings.vadThreshold,
+                useGain: settings.useGain,
+                screenEcho: echoToScreen, transcriptLog: transcriptLog,
+                pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
+        }
 
         let othersDesc = systemDiarizer != nil ? "Speaker N" : labels.others
         if outputs.audio == nil && duration == nil {
@@ -1009,7 +1114,7 @@ struct Hark: ParsableCommand {
             sourceSinks: sourceSinks + trackSinks)
 
         try? writer.close()
-        backend.shutdown()
+        backend?.shutdown()
         try micTranscriber.rethrowErrors()
         try systemTranscriber.rethrowErrors()
     }
@@ -1020,7 +1125,7 @@ struct Hark: ParsableCommand {
         outputs: ResolvedOutputs, settings: ResolvedSettings, captureEngine: CaptureEngine,
         session: CaptureSession, format: PCMFormat, mixedSinks: [AudioSink],
         trackSinks: [(CaptureSource, AudioSink)], diarizer: EENDStreamingDiarizer?,
-        transcriptLog: TranscriptLog? = nil
+        streaming: NemotronStreamingModels?, transcriptLog: TranscriptLog? = nil
     ) throws {
         guard let transcriptDest = outputs.transcript else {
             throw HarkError.usage(
@@ -1028,19 +1133,35 @@ struct Hark: ParsableCommand {
         }
         let writer = try LiveTranscriptWriter(
             destination: transcriptDest, format: transcriptFormat(for: transcriptDest))
-        let base = try TranscriptionEngine.makeLive(
-            engineName: settings.engine, modelFlag: model, language: settings.language,
-            quiet: !Log.isVerbose)
-        let backend = SerializedBackend(base)
-        let transcriber = LiveTranscriber(
-            backend: backend, writer: writer, ownsBackend: false, ownsWriter: false,
-            speaker: nil, language: settings.language, translate: settings.translate,
-            captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
-            labelName: "live transcript [Speaker N]", resolver: diarizer,
-            useVad: settings.useVad, vadThreshold: settings.vadThreshold, useGain: settings.useGain,
-            // Interactive: echo captions to the screen too (PRD §6.9).
-            screenEcho: interactive && transcriptDest.isFile, transcriptLog: transcriptLog,
-            pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
+        // Interactive: echo captions to the screen too (PRD §6.9).
+        let echoToScreen = interactive && transcriptDest.isFile
+        let backend: SerializedBackend?
+        let transcriber: LiveTranscriptionSink
+        if let streaming {
+            backend = nil
+            transcriber = StreamingLiveTranscriber(
+                recognizer: try streaming.makeRecognizer(), writer: writer, ownsWriter: false,
+                speaker: nil, resolver: diarizer, captureFormat: format,
+                control: captureEngine.control, sourceKey: "single",
+                gapSeconds: settings.segmentPause, maxLineSeconds: settings.segmentWindow,
+                labelName: "live transcript [Speaker N]", screenEcho: echoToScreen,
+                transcriptLog: transcriptLog)
+        } else {
+            let shared = SerializedBackend(
+                try TranscriptionEngine.makeLive(
+                    engineName: settings.engine, modelFlag: model, language: settings.language,
+                    quiet: !Log.isVerbose))
+            backend = shared
+            transcriber = LiveTranscriber(
+                backend: shared, writer: writer, ownsBackend: false, ownsWriter: false,
+                speaker: nil, language: settings.language, translate: settings.translate,
+                captureFormat: format, silenceThresholdDBFS: settings.silenceThreshold,
+                labelName: "live transcript [Speaker N]", resolver: diarizer,
+                useVad: settings.useVad, vadThreshold: settings.vadThreshold,
+                useGain: settings.useGain,
+                screenEcho: echoToScreen, transcriptLog: transcriptLog,
+                pauseSeconds: settings.segmentPause, maxWindowSeconds: settings.segmentWindow)
+        }
 
         if outputs.audio == nil && duration == nil {
             Log.notice("listening (speakers: Speaker N) — press Ctrl+C to stop")
@@ -1059,7 +1180,7 @@ struct Hark: ParsableCommand {
             duration: duration, warnOnSilence: captureSystem,
             sourceSinks: trackSinks)
         try? writer.close()
-        backend.shutdown()
+        backend?.shutdown()
         try transcriber.rethrowErrors()
     }
 
