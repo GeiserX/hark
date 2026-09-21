@@ -156,18 +156,36 @@ final class RemoteControlAgent: @unchecked Sendable {
 
         // Run the capture off the server's executor; report the terminal state.
         let box = UncheckedSendableBox(value: command)
+        let outcome = StartOutcome()
         captureQueue.async { [sessions] in
             let cmd = box.value
             do {
                 try cmd.executeLive(control: control)
                 sessions.finish(id: id, error: nil)
+                outcome.ended(with: nil)
             } catch {
                 Log.verbose("remote session \(id) ended with error: \(error)")
                 sessions.finish(id: id, error: Self.message(for: error))
+                outcome.ended(with: error)
             }
+            control.markRunEnded()
         }
-        return Self.json(StartedResponse(snapshot: snap), .created)
+        // Opening the sources, and loading a recognizer model that may be cold,
+        // all happen inside executeLive. Answering before that meant answering
+        // "recording" while nothing was being captured, and everything said in
+        // the meantime was gone. Wait for the capture to exist, and hand back the
+        // run's own error instead of a 201 when it fails on the way up.
+        let capturing = control.waitUntilCapturing(timeout: Self.startWait)
+        if !capturing, let error = outcome.error {
+            throw error
+        }
+        return Self.json(StartedResponse(snapshot: snap, capturing: capturing), .created)
     }
+
+    /// How long `POST /start` waits for the capture to be running before it
+    /// answers anyway with `capturing: false`. A first-ever model download can
+    /// outlast any sensible wait, and the client can watch `GET /status` for it.
+    static let startWait: TimeInterval = 60
 
     private func statusResponse() throws -> HTTPResponse {
         Self.json(
@@ -317,13 +335,34 @@ private struct StartedResponse: Encodable {
     let muted: Bool
     let audio: String?
     let transcript: String?
+    /// Whether the capture was already running when this answer was sent. False
+    /// only when the wait ran out, never because the start failed: that is an
+    /// error response instead.
+    let capturing: Bool
 
-    init(snapshot: RemoteSessionManager.Snapshot) {
+    init(snapshot: RemoteSessionManager.Snapshot, capturing: Bool) {
         id = snapshot.id
         state = snapshot.state.rawValue
         muted = snapshot.muted
         audio = snapshot.audio
         transcript = snapshot.transcript
+        self.capturing = capturing
+    }
+}
+
+/// How a capture run ended, for the `/start` handler waiting on the way up.
+/// Thread-safe: written on the capture queue, read on the server's.
+private final class StartOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private var failure: Error?
+
+    func ended(with error: Error?) {
+        lock.lock(); failure = error; lock.unlock()
+    }
+
+    var error: Error? {
+        lock.lock(); defer { lock.unlock() }
+        return failure
     }
 }
 
@@ -357,6 +396,10 @@ struct StatusResponse: Encodable {
         /// capture is recording. Optional, so with streaming off the key is
         /// absent and the payload is byte-identical to before.
         let partial: PartialLine?
+        /// Whether the capture is open. `state` says `recording` from the moment a
+        /// start is accepted, which is before the sources are started; this says
+        /// whether what is said now will be recorded.
+        let capturing: Bool
         let callAudio: CallAudio?
     }
     /// Whether the call's audio (the system tap) is still being heard.
@@ -375,7 +418,7 @@ struct StatusResponse: Encodable {
                 id: $0.id, state: $0.state.rawValue, muted: $0.muted,
                 elapsed: Date().timeIntervalSince($0.startedAt),
                 audio: $0.audio, transcript: $0.transcript, error: $0.error,
-                partial: $0.partial,
+                partial: $0.partial, capturing: $0.capturing,
                 callAudio: $0.callAudio.map {
                     CallAudio(
                         state: $0.state.rawValue,

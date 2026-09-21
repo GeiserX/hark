@@ -24,6 +24,47 @@ final class CaptureControl: @unchecked Sendable {
     private var partials: [String: (line: PartialLine, seq: UInt64)] = [:]
     private var partialSeq: UInt64 = 0
 
+    /// Signalled once the capture is open: every source started and the output
+    /// ready, so anything audible from that moment on is recorded. `POST /start`
+    /// waits for this before it answers, so a client told "recording" can start
+    /// talking and be heard.
+    /// Before this gate, `/start` answered the moment the session was registered
+    /// and the whole setup happened afterwards, so everything said during it was
+    /// lost: measured at 12.7 s on the first `--live-streaming` call after a
+    /// reboot, where the recognizer's model is loaded cold.
+    private let gate = NSCondition()
+    private var capturing = false
+    private var runEnded = false
+
+    /// True once the capture is delivering audio, and it stays true for the rest
+    /// of the run: a pause keeps the sources open.
+    var isCapturing: Bool {
+        gate.lock(); defer { gate.unlock() }
+        return capturing
+    }
+
+    /// Called by the capture engine when audio starts flowing.
+    func markCapturing() {
+        gate.lock(); capturing = true; gate.broadcast(); gate.unlock()
+    }
+
+    /// Called when the run returns, so a waiter is released even if the run
+    /// failed before it ever captured anything.
+    func markRunEnded() {
+        gate.lock(); runEnded = true; gate.broadcast(); gate.unlock()
+    }
+
+    /// Waits for the capture to start. Returns true when it is running, false
+    /// when the run ended first or `timeout` passed.
+    func waitUntilCapturing(timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        gate.lock(); defer { gate.unlock() }
+        while !capturing && !runEnded {
+            if !gate.wait(until: deadline) { break }
+        }
+        return capturing
+    }
+
     /// True while capture is paused (the I/O path drops chunks).
     var isPaused: Bool {
         lock.lock(); defer { lock.unlock() }

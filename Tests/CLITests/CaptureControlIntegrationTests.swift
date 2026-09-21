@@ -364,3 +364,91 @@ struct PerSourceWriteTests {
         #expect(!mixedSink.wroteAfterFinalize)  // unchanged: already protected
     }
 }
+
+/// A session whose `start()` blocks, the shape of a capture whose recognizer
+/// model is being loaded cold, or whose device takes its time to open.
+private final class SlowStartSession: CaptureSession, @unchecked Sendable {
+    private let lock = NSLock()
+    private var onAudio: (@Sendable (Data) -> Void)?
+    let entered = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+
+    func start(onAudio: @escaping @Sendable (Data) -> Void) throws {
+        entered.signal()
+        _ = release.wait(timeout: .now() + 30)
+        lock.lock(); self.onAudio = onAudio; lock.unlock()
+    }
+    func stop() {}
+    func letItStart() { release.signal() }
+    var isReady: Bool { lock.lock(); defer { lock.unlock() }; return onAudio != nil }
+}
+
+/// A session that throws instead of ever capturing, the shape of a missing
+/// permission or a device that is gone.
+private final class FailingSession: CaptureSession, @unchecked Sendable {
+    func start(onAudio: @escaping @Sendable (Data) -> Void) throws {
+        throw HarkError.unavailable("no such device")
+    }
+    func stop() {}
+}
+
+@Suite("A capture says when it is really running", .serialized)
+struct CapturingGateTests {
+    /// Nothing is captured until every source is open, so the gate must stay shut
+    /// until then. `POST /start` waits on it before answering "recording".
+    @Test func theGateOpensOnlyOnceAudioFlows() throws {
+        let control = CaptureControl()
+        let session = SlowStartSession()
+        let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+        var engine = CaptureEngine(
+            deviceUID: nil, rate: 16000, bits: 16, channels: 1,
+            captureSystem: false, apps: [], excludeApps: [], mix: false)
+        engine.control = control
+
+        let box = UncheckedSendableBox(value: (engine, session, CollectingSink()))
+        Thread.detachNewThread {
+            let (engine, session, sink) = box.value
+            try? engine.run(
+                session: session, format: format, into: [sink],
+                duration: nil, warnOnSilence: false)
+        }
+        #expect(session.entered.wait(timeout: .now() + 5) == .success)
+        #expect(control.isCapturing == false)
+        #expect(control.waitUntilCapturing(timeout: 0.2) == false)   // still opening
+
+        session.letItStart()
+        #expect(control.waitUntilCapturing(timeout: 5) == true)
+        #expect(control.isCapturing == true)
+        control.stop()
+    }
+
+    /// A start that fails on the way up must release the waiter instead of
+    /// holding it for the whole timeout, so the client gets the real error.
+    @Test func aRunThatNeverCapturesReleasesTheWaiter() throws {
+        let control = CaptureControl()
+        let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+        var engine = CaptureEngine(
+            deviceUID: nil, rate: 16000, bits: 16, channels: 1,
+            captureSystem: false, apps: [], excludeApps: [], mix: false)
+        engine.control = control
+
+        let box = UncheckedSendableBox(value: (engine, FailingSession(), CollectingSink()))
+        Thread.detachNewThread {
+            let (engine, session, sink) = box.value
+            try? engine.run(
+                session: session, format: format, into: [sink],
+                duration: nil, warnOnSilence: false)
+            control.markRunEnded()          // what the agent's handler does
+        }
+        #expect(control.waitUntilCapturing(timeout: 5) == false)
+        #expect(control.isCapturing == false)
+    }
+
+    /// A pause does not close the sources, so the gate stays open.
+    @Test func pausingDoesNotCloseTheGate() {
+        let control = CaptureControl()
+        control.markCapturing()
+        control.pause()
+        #expect(control.isCapturing == true)
+    }
+}
