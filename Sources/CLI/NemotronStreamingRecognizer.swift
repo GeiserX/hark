@@ -8,9 +8,16 @@ import Foundation
 /// This is the only file in hark that names FluidAudio's streaming types. The
 /// rest of the live path talks to `StreamingRecognizer`.
 final class NemotronStreamingModels: @unchecked Sendable {
-    /// Chunk tier fed to the encoder. 2240 ms is the tier FluidAudio recommends
-    /// for every ship: text lands about 2.5 s behind the audio.
-    static let chunkMs = 2240
+    /// Chunk tier fed to the encoder: the model decodes this much audio at a
+    /// time, so it is the floor under how late the text can be. The two Latin
+    /// ships differ in nothing else, same `att_context_size`, same vocabulary,
+    /// so the shorter tier costs only what a smaller window costs the model.
+    /// Measured on 20 real recordings against the accurate pass hark runs after
+    /// a call: English is identical at both tiers, 5.4% either way, and Spanish
+    /// goes from 12.5% to 13.3%. Paying 0.8 pp of Spanish for text that lands
+    /// four times sooner is worth it. 2240 ms is what FluidAudio recommends for
+    /// throughput, which is not what a live transcript needs.
+    static let chunkMs = 560
 
     /// Cache directory under `FluidAudioCache.modelsDirectory`. The repo folder
     /// name is `nemotron-multilingual` (FluidAudio's `Repo.folderName`), then

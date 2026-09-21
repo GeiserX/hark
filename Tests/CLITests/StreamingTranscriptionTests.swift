@@ -445,8 +445,8 @@ struct StreamingSettingsTests {
     /// (`<repo folder>/<vocab ship>/<chunk tier>`), or the "already cached" check
     /// never sees the model and every run prints a download notice.
     @Test func bundlePathMatchesTheCacheLayout() {
-        #expect(NemotronStreamingModels.bundle == "nemotron-multilingual/latin/2240ms")
-        #expect(NemotronStreamingModels.chunkMs == 2240)
+        #expect(NemotronStreamingModels.bundle == "nemotron-multilingual/latin/560ms")
+        #expect(NemotronStreamingModels.chunkMs == 560)
     }
 
     @Test func modelCatalogOffersTheStreamingRecognizer() {

@@ -142,7 +142,7 @@ struct SayStreamingTests {
         let result = try await transcribe(
             call.samples, recognizer: try models.makeRecognizer(), path: path)
 
-        print("streaming: \(String(format: "%.0f", result.msPerChunk)) ms per 2240 ms chunk")
+        print("streaming: \(String(format: "%.0f", result.msPerChunk)) ms per \(NemotronStreamingModels.chunkMs) ms chunk")
         for line in result.lines {
             print("  [\(String(format: "%.2f", line.start))–\(String(format: "%.2f", line.end))] \(line.text)")
         }
@@ -196,7 +196,7 @@ struct SayStreamingTests {
 
         print(
             "two streams: \(String(format: "%.0f", resultA.msPerChunk)) ms and "
-                + "\(String(format: "%.0f", resultB.msPerChunk)) ms per 2240 ms chunk")
+                + "\(String(format: "%.0f", resultB.msPerChunk)) ms per \(NemotronStreamingModels.chunkMs) ms chunk")
         #expect(!resultA.lines.isEmpty)
         #expect(!resultB.lines.isEmpty)
         #expect(resultA.msPerChunk < Double(NemotronStreamingModels.chunkMs))

@@ -11,11 +11,12 @@ All notable changes to Hark are documented here. The format is loosely based on
   `$HARK_LIVE_STREAMING`, config key `live-streaming`, `liveStreaming` on
   `POST /start`) transcribes the capture continuously through the Nemotron
   multilingual streaming recognizer instead of one window per pause. Text appears
-  about 2.5 s behind the audio instead of 9 to 12 s, and the open line grows in
-  place until `--segment-pause` closes it. Closed lines go into the transcript
+  about 2 s after being spoken, and the open line grows every 0.6 s until
+  `--segment-pause` closes it, against 9 to 12 s for a whole line from the
+  segmented path. Closed lines go into the transcript
   exactly as before. The open line is written nowhere; the remote-control agent
   serves it as `session.partial` on `GET /status`. Apple Silicon, with English,
-  Spanish, French, Italian, Portuguese and German in one model (612 MB on first
+  Spanish, French, Italian, Portuguese and German in one model (583 MB on first
   use, pre-fetch with `hark models download fluidaudio:streaming-asr`). It cannot
   translate, `--diarize-engine offline` ignores it, and pairing it with `-i FILE`
   is a usage error. Off by default: where it cannot run, hark prints why and the
