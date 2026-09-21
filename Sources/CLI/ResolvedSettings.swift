@@ -35,6 +35,9 @@ struct ResolvedSettings: Equatable {
     /// speech after which one is cut anyway (both seconds; VAD and amplitude paths).
     let segmentPause: Double
     let segmentWindow: Double
+    /// Live: stream continuously through the streaming recognizer, publishing an
+    /// open line, instead of transcribing one finished window per pause.
+    let liveStreaming: Bool
     let useGain: Bool
 
     let speakers: Bool
@@ -122,6 +125,8 @@ struct ResolvedSettings: Equatable {
         let segmentWindow = try double(a.segmentWindow, .segmentWindow, config.segmentWindow) {
             try ConfigKey.parseSegmentWindow($0, .segmentWindow)
         } ?? 12
+        let liveStreaming = try bool(
+            a.liveStreaming, .liveStreaming, config.liveStreaming, default: false)
         let useGain = try bool(a.useGain, .gain, config.gain, default: true)
 
         let speakers = try bool(a.speakers, .speakers, config.speakers, default: false)
@@ -154,7 +159,7 @@ struct ResolvedSettings: Equatable {
             tracks: tracks, keepAwake: keepAwake,
             silenceThreshold: silenceThreshold, useVad: useVad, vadThreshold: vadThreshold,
             segmentPause: segmentPause, segmentWindow: segmentWindow,
-            useGain: useGain, speakers: speakers, speakerMode: speakerMode,
+            liveStreaming: liveStreaming, useGain: useGain, speakers: speakers, speakerMode: speakerMode,
             speakerLabels: speakerLabels, diarizeEngine: diarizeEngine, maxSpeakers: maxSpeakers,
             speakerThreshold: speakerThreshold, remoteControlPort: remoteControlPort)
     }
@@ -180,6 +185,12 @@ struct ResolvedSettings: Equatable {
             throw HarkError.usage(
                 "segment-window (\(ConfigKey.formatNumber(segmentWindow))s) must be greater than "
                     + "segment-pause (\(ConfigKey.formatNumber(segmentPause))s).")
+        }
+        // The streaming recognizer is verbatim-only, so the pairing is a usage
+        // error wherever it comes from (flag, env, or config).
+        if liveStreaming && translate {
+            throw HarkError.usage(
+                "live streaming cannot translate; drop --translate or --live-streaming.")
         }
     }
 

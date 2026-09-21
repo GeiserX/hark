@@ -246,7 +246,8 @@ extension ResolvedSettings {
             channels: channels, tracks: tracks, keepAwake: keepAwake,
             silenceThreshold: silenceThreshold,
             useVad: useVad, vadThreshold: vadThreshold, segmentPause: segmentPause,
-            segmentWindow: segmentWindow, useGain: useGain, speakers: speakers,
+            segmentWindow: segmentWindow, liveStreaming: liveStreaming, useGain: useGain,
+            speakers: speakers,
             speakerMode: speakerMode, speakerLabels: speakerLabels, diarizeEngine: diarizeEngine,
             maxSpeakers: maxSpeakers, speakerThreshold: speakerThreshold,
             remoteControlPort: remoteControlPort)
