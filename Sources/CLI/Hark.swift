@@ -310,7 +310,7 @@ struct Hark: ParsableCommand {
 
     @Flag(name: .customLong("live-streaming"), inversion: .prefixedNo, help: """
         Live: transcribe continuously with the streaming multilingual model \
-        instead of one line per pause. Text appears about 2.5 s behind the audio \
+        instead of one line per pause. Text appears about 2 s behind the audio \
         and the open line grows in place; default off; Apple Silicon; \
         en/es/fr/it/pt/de; cannot translate. Or $HARK_LIVE_STREAMING / hark config.
         """)
