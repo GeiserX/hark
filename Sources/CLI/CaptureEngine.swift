@@ -328,6 +328,7 @@ struct CaptureEngine {
                             + "tap hears audio — rebuilding it (attempt \(attempt)); "
                             + tapSession.tapDiagnostics)
                     _ = session.restart()
+                    tapMonitor.restartFinished()
                 case .gaveUp(let silentFor):
                     Log.notice(
                         "system audio tap still dead after \(Int(silentFor)) s and repeated "

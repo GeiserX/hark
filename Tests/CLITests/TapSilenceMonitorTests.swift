@@ -183,6 +183,71 @@ struct TapSilenceMonitorTests {
         #expect(m.status() == .init(state: .ok, silentFor: 0, restarts: 0))
     }
 
+    /// Pausing (or a stalled stream) during a `silent` or `dead` run must not
+    /// leave that verdict on display for a run that no longer exists.
+    @Test func endingARunWithoutAudioClearsSilentAndDead() {
+        let clock = Clock()
+        let m = monitor(clock)
+        zeros(m, clock, seconds: 10)
+        #expect(m.tick() == .probe)
+        m.probeFinished(heardAudio: false)
+        #expect(m.status().state == .silent)
+        m.setPaused(true)
+        #expect(m.status() == .init(state: .ok, silentFor: 0, restarts: 0))
+        m.setPaused(false)
+
+        zeros(m, clock, seconds: 10)
+        #expect(m.tick() == .probe)
+        m.probeFinished(heardAudio: true)
+        #expect(m.status().state == .dead)
+        clock.t += 5  // cycles stop arriving: the stall watchdog's case
+        #expect(m.tick() == .none)
+        #expect(m.status() == .init(state: .ok, silentFor: 0, restarts: 0))
+
+        // `recovered` is history, not a verdict on the run: it survives.
+        zeros(m, clock, seconds: 10)
+        #expect(m.tick() == .probe)
+        m.probeFinished(heardAudio: true)
+        clock.t += 1
+        m.observe(silent: true)
+        #expect(m.tick() == .restart(silentFor: 11, attempt: 1))
+        m.restartFinished()
+        m.observe(silent: false)
+        zeros(m, clock, seconds: 3)
+        m.setPaused(true)
+        #expect(m.status().state == .recovered)
+    }
+
+    /// A rebuild that takes 3 s delivers no cycles meanwhile. That must not
+    /// read as a stalled stream, or the backoff and the cap of 5 reset and a
+    /// tap that stays dead is rebuilt every 10 s forever.
+    @Test func slowRebuildsKeepTheBackoffAndTheCap() {
+        let clock = Clock()
+        let m = monitor(clock)
+        var restarts: [Int] = [], gaveUp = 0
+        m.observe(silent: true)
+        let start = clock.t
+        while clock.t.timeIntervalSince(start) < 900 {
+            clock.t += 1
+            m.observe(silent: true)
+            switch m.tick() {
+            case .probe: m.probeFinished(heardAudio: true)
+            case .restart:
+                restarts.append(Int(clock.t.timeIntervalSince(start)))
+                clock.t += 3  // restart() blocks the tick queue; no cycles arrive
+                m.restartFinished()
+                #expect(m.tick() == .none)  // the tick that fires right after
+            case .gaveUp: gaveUp += 1
+            case .none: break
+            }
+        }
+        #expect(restarts == [11, 31, 61, 121, 181])
+        #expect(gaveUp == 1)
+        #expect(m.status().state == .dead)
+        m.observe(silent: false)
+        #expect(m.status() == .init(state: .recovered, silentFor: 0, restarts: 5))
+    }
+
     /// Restarts that don't bring audio back ride the probe backoff and stop at
     /// the cap; the recording is never stopped.
     @Test func failedRestartsBackOffAndAreCapped() {

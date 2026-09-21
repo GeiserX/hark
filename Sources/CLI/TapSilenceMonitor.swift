@@ -125,7 +125,14 @@ final class TapSilenceMonitor: @unchecked Sendable {
         defer { lock.unlock() }
         guard value != paused else { return }
         paused = value
-        if value, runStartedAt != nil { endRun() }
+        if value, runStartedAt != nil { abandonRun() }
+    }
+
+    /// Ends a run that no audio ended (pause, stalled stream). Its `silent` or
+    /// `dead` verdict goes with it; `recovered` is history and stays.
+    private func abandonRun() {
+        if state != .recovered { state = .ok }
+        endRun()
     }
 
     private func endRun() {
@@ -143,7 +150,7 @@ final class TapSilenceMonitor: @unchecked Sendable {
         guard !paused, let runStartedAt else { return .none }
         let t = now()
         if let last = lastSilentCycleAt, t.timeIntervalSince(last) > staleSeconds {
-            endRun()
+            abandonRun()
             return .none
         }
         let age = t.timeIntervalSince(runStartedAt)
@@ -168,6 +175,15 @@ final class TapSilenceMonitor: @unchecked Sendable {
         }
         probingRunID = runID
         return .probe
+    }
+
+    /// The owner's `restart()` returned. A rebuild delivers no IO cycles while
+    /// it runs, and a slow one must not read as a stalled stream: that would
+    /// end the zero run and with it the restart backoff and cap.
+    func restartFinished() {
+        lock.lock()
+        defer { lock.unlock() }
+        if lastSilentCycleAt != nil { lastSilentCycleAt = now() }
     }
 
     func probeFinished(heardAudio: Bool) {
