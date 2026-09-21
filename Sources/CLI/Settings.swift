@@ -105,6 +105,7 @@ enum ConfigKey: String, CaseIterable {
     case vadThreshold = "vad-threshold"
     case segmentPause = "segment-pause"
     case segmentWindow = "segment-window"
+    case liveStreaming = "live-streaming"
     case gain
     case speakers
     case speakerMode = "speaker-mode"

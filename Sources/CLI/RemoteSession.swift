@@ -43,6 +43,10 @@ final class RemoteSessionManager: @unchecked Sendable {
         /// Whether the microphone is currently muted (orthogonal to `state`).
         var muted: Bool
         var error: String?
+        /// The open transcript line while `--live-streaming` is on, filled by
+        /// `current()` from the live capture control. Never persisted with the
+        /// snapshot: a stopped session has no open line.
+        var partial: PartialLine? = nil
     }
 
     /// Schedules the stop-timeout check. Injectable so tests drive it without
@@ -82,10 +86,14 @@ final class RemoteSessionManager: @unchecked Sendable {
         return workerRunning && !isActive
     }
 
-    /// The last/current session snapshot (nil before the first `begin`).
+    /// The last/current session snapshot (nil before the first `begin`). The open
+    /// streaming line is read live from the control and only while recording, so
+    /// it can never outlive the capture that produced it.
     func current() -> Snapshot? {
         lock.lock(); defer { lock.unlock() }
-        return snapshot
+        var snap = snapshot
+        if snap?.state == .recording { snap?.partial = control?.partialLine }
+        return snap
     }
 
     /// Registers a new active session. Throws `.busy` if one is already running,
@@ -251,6 +259,7 @@ struct StartRequest: Decodable {
     var vadThreshold: Double?
     var segmentPause: Double?
     var segmentWindow: Double?
+    var liveStreaming: Bool?
     var gain: Bool?
 
     /// Builds the per-session `Hark` command from the agent's launch defaults
@@ -318,6 +327,7 @@ struct StartRequest: Decodable {
         if let vadThreshold { cmd.vadThreshold = vadThreshold }
         if let segmentPause { cmd.segmentPause = segmentPause }
         if let segmentWindow { cmd.segmentWindow = segmentWindow }
+        if let liveStreaming { cmd.liveStreaming = liveStreaming }
         if let gain { cmd.useGain = gain }
 
         // The agent writes to files under the working directory and never to the

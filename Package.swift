@@ -16,7 +16,7 @@ let package = Package(
         .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "0.9.0"),
         // CoreML Parakeet ASR engine (PRD §6.6 `parakeet`); always linked
         // (PLAN Phase 6.4). Apple-Silicon-first.
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.4"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.15.3"),
         // Embedded HTTP/1.1 server for the remote-control agent (PRD §6.10,
         // PLAN Phase 10.3). Pure-Swift, minimal deps; statically linked so
         // there is nothing for users to install. MIT — see NOTICES.
