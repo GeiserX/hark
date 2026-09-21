@@ -18,6 +18,15 @@ struct TapSilenceMonitorTests {
             silenceSeconds: 10, confirmSeconds: 0.5, maxRestarts: maxRestarts, now: clock.now)
     }
 
+    /// `seconds` of zeros, one silent cycle per second (cycles keep arriving).
+    private func zeros(_ m: TapSilenceMonitor, _ clock: Clock, seconds: Int) {
+        m.observe(silent: true)
+        for _ in 0..<seconds {
+            clock.t += 1
+            m.observe(silent: true)
+        }
+    }
+
     /// Advances the clock second by second through a zero run, answering every
     /// probe with `heard`, and returns the run ages at which probes/restarts fired.
     private func run(
@@ -44,8 +53,7 @@ struct TapSilenceMonitorTests {
         let clock = Clock()
         let m = monitor(clock)
         for _ in 0..<20 {
-            m.observe(silent: true)
-            clock.t += 9  // just under the threshold, like a pause between speakers
+            zeros(m, clock, seconds: 9)  // just under the threshold, like a pause between speakers
             #expect(m.tick() == .none)
             m.observe(silent: false)
             clock.t += 1
@@ -74,8 +82,7 @@ struct TapSilenceMonitorTests {
         let clock = Clock()
         let m = monitor(clock)
         m.observe(silent: false)
-        m.observe(silent: true)
-        clock.t += 10
+        zeros(m, clock, seconds: 10)
         #expect(m.tick() == .probe)
         #expect(m.tick() == .none)  // one probe at a time
         m.probeFinished(heardAudio: true)
@@ -91,8 +98,7 @@ struct TapSilenceMonitorTests {
         #expect(m.tick() == .none)
 
         // "recovered" lasts until the next long zero run is judged.
-        m.observe(silent: true)
-        clock.t += 10
+        zeros(m, clock, seconds: 10)
         #expect(m.tick() == .probe)
         m.probeFinished(heardAudio: false)
         #expect(m.status().state == .silent)
@@ -105,8 +111,7 @@ struct TapSilenceMonitorTests {
     @Test func audioReturningDuringConfirmationCancelsTheRestart() {
         let clock = Clock()
         let m = monitor(clock)
-        m.observe(silent: true)
-        clock.t += 10
+        zeros(m, clock, seconds: 10)
         #expect(m.tick() == .probe)
         m.probeFinished(heardAudio: true)
         clock.t += 0.1
@@ -120,16 +125,62 @@ struct TapSilenceMonitorTests {
     @Test func staleProbeVerdictIsIgnored() {
         let clock = Clock()
         let m = monitor(clock)
-        m.observe(silent: true)
-        clock.t += 10
+        zeros(m, clock, seconds: 10)
         #expect(m.tick() == .probe)
         m.observe(silent: false)  // audio back while the probe is still running
         m.observe(silent: true)  // a new run begins
         m.probeFinished(heardAudio: true)
-        clock.t += 5
+        zeros(m, clock, seconds: 5)
         #expect(m.tick() == .none)
         #expect(m.status().state == .ok)
         #expect(m.status().restarts == 0)
+    }
+
+    /// A paused recording is never probed, and the zero run doesn't age across
+    /// the pause: after resuming, the full threshold applies again.
+    @Test func pauseEndsTheRunAndNothingHappensWhilePaused() {
+        let clock = Clock()
+        let m = monitor(clock)
+        zeros(m, clock, seconds: 9)
+        m.setPaused(true)
+        for _ in 0..<120 {
+            clock.t += 1
+            m.observe(silent: true)  // the tap keeps cycling while paused
+            #expect(m.tick() == .none)
+        }
+        #expect(m.status() == .init(state: .ok, silentFor: 0, restarts: 0))
+        m.setPaused(false)
+        zeros(m, clock, seconds: 9)
+        #expect(m.tick() == .none)  // 9 s since resuming, not 138 s
+        zeros(m, clock, seconds: 1)
+        #expect(m.tick() == .probe)
+    }
+
+    /// A probe asked for before a pause answers after it: ignored.
+    @Test func probeVerdictFromBeforeAPauseIsIgnored() {
+        let clock = Clock()
+        let m = monitor(clock)
+        zeros(m, clock, seconds: 10)
+        #expect(m.tick() == .probe)
+        m.setPaused(true)
+        m.probeFinished(heardAudio: true)
+        m.setPaused(false)
+        zeros(m, clock, seconds: 5)
+        #expect(m.tick() == .none)
+        #expect(m.status() == .init(state: .ok, silentFor: 5, restarts: 0))
+    }
+
+    /// Cycles stop arriving (a stalled stream): that is the stall watchdog's
+    /// case. Ticks with no `observe` calls never probe or restart.
+    @Test func ticksWithoutCyclesNeverAct() {
+        let clock = Clock()
+        let m = monitor(clock)
+        zeros(m, clock, seconds: 5)
+        for _ in 0..<300 {
+            clock.t += 1
+            #expect(m.tick() == .none)
+        }
+        #expect(m.status() == .init(state: .ok, silentFor: 0, restarts: 0))
     }
 
     /// Restarts that don't bring audio back ride the probe backoff and stop at
@@ -156,7 +207,10 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     private var onAudio: (@Sendable (Data) -> Void)?
     private var restarts = 0
     private var probes = 0
-    private var probeAnswer = false
+    private var probeAnswer = TapProbeResult.silent
+    private var restartSeconds = 0.0
+    private var restarting = false
+    private(set) var stoppedDuringRestart = false
     var onTapActivity: (@Sendable (_ silent: Bool) -> Void)?
     let reportsTapActivity = true
     let tapDiagnostics = "stub tap"
@@ -164,12 +218,18 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     func start(onAudio: @escaping @Sendable (Data) -> Void) throws {
         lock.lock(); self.onAudio = onAudio; lock.unlock()
     }
-    func stop() {}
+    func stop() {
+        lock.lock(); if restarting { stoppedDuringRestart = true }; lock.unlock()
+    }
     func restart() -> Bool {
-        lock.lock(); restarts += 1; lock.unlock()
+        lock.lock(); restarts += 1; restarting = true; let hold = restartSeconds; lock.unlock()
+        if hold > 0 { Thread.sleep(forTimeInterval: hold) }
+        lock.lock(); restarting = false; lock.unlock()
         return true
     }
-    func probeTap(maxSeconds: Double) -> Bool {
+    var isRestarting: Bool { lock.lock(); defer { lock.unlock() }; return restarting }
+    func setRestartSeconds(_ value: Double) { lock.lock(); restartSeconds = value; lock.unlock() }
+    func probeTap(maxSeconds: Double) -> TapProbeResult {
         lock.lock(); defer { lock.unlock() }
         probes += 1
         return probeAnswer
@@ -177,7 +237,7 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     var isReady: Bool { lock.lock(); defer { lock.unlock() }; return onAudio != nil }
     var restartCount: Int { lock.lock(); defer { lock.unlock() }; return restarts }
     var probeCount: Int { lock.lock(); defer { lock.unlock() }; return probes }
-    func setProbeHearsAudio(_ value: Bool) { lock.lock(); probeAnswer = value; lock.unlock() }
+    func setProbeResult(_ value: TapProbeResult) { lock.lock(); probeAnswer = value; lock.unlock() }
     /// One IO cycle: the mic keeps the buffers coming either way.
     func cycle(tapSilent: Bool) {
         lock.lock(); let cb = onAudio; lock.unlock()
@@ -197,13 +257,15 @@ private final class NullSink: AudioSink, @unchecked Sendable {
 struct DeadTapRecoveryTests {
     private let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
 
-    private func start(_ session: TapStubSession, _ control: CaptureControl) -> DispatchSemaphore {
+    private func start(
+        _ session: TapStubSession, _ control: CaptureControl, stallSeconds: Double = 3
+    ) -> DispatchSemaphore {
         var eng = CaptureEngine(
             deviceUID: nil, rate: 16000, bits: 16, channels: 1,
             captureSystem: true, apps: [], excludeApps: [], mix: true)
         eng.control = control
         eng.recovery = RecoverySettings(
-            enabled: true, stallSeconds: 3, giveUpSeconds: 0, tapSilenceSeconds: 0.5)
+            enabled: true, stallSeconds: stallSeconds, giveUpSeconds: 0, tapSilenceSeconds: 0.5)
         let finished = DispatchSemaphore(value: 0)
         let box = UncheckedSendableBox(value: (eng, session, format))
         Thread.detachNewThread {
@@ -231,7 +293,7 @@ struct DeadTapRecoveryTests {
     @Test func zerosWithAudibleProbeRebuildTheTap() {
         let control = CaptureControl()
         let session = TapStubSession()
-        session.setProbeHearsAudio(true)
+        session.setProbeResult(.heardAudio)
         let finished = start(session, control)
 
         feed(session, tapSilent: false, seconds: 0.3)
@@ -248,12 +310,85 @@ struct DeadTapRecoveryTests {
         #expect(finished.wait(timeout: .now() + 5) == .success)
     }
 
+    /// A probe that can't be built is not evidence of anything: no rebuild.
+    @Test func failedProbeNeverRebuilds() {
+        let control = CaptureControl()
+        let session = TapStubSession()
+        session.setProbeResult(.failed("no tap"))
+        let finished = start(session, control)
+
+        feed(session, tapSilent: true, seconds: 3.5)
+        #expect(session.probeCount >= 1)
+        #expect(session.restartCount == 0)
+        #expect(control.callAudio?.state == .silent)
+
+        control.stop()
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+    }
+
+    /// Paused: zeros with an audible probe would be a dead tap, but a paused
+    /// recording is left alone. Resuming arms it again.
+    @Test func pausedRecordingIsNeitherProbedNorRebuilt() {
+        let control = CaptureControl()
+        let session = TapStubSession()
+        session.setProbeResult(.heardAudio)
+        let finished = start(session, control)
+
+        feed(session, tapSilent: false, seconds: 0.2)
+        control.pause()
+        feed(session, tapSilent: true, seconds: 3.5)
+        #expect(session.probeCount == 0)
+        #expect(session.restartCount == 0)
+        control.resume()
+        feed(session, tapSilent: true, seconds: 3.5)
+        #expect(session.restartCount >= 1)
+
+        control.stop()
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+    }
+
+    /// Buffers stop arriving altogether: the stall watchdog rebuilds the tap and
+    /// the tap monitor stays out of it (no probe, no second rebuild).
+    @Test func stalledStreamIsLeftToTheStallWatchdog() {
+        let control = CaptureControl()
+        let session = TapStubSession()
+        session.setProbeResult(.heardAudio)
+        let finished = start(session, control, stallSeconds: 0.5)
+
+        feed(session, tapSilent: true, seconds: 0.3)
+        usleep(5_000_000)  // no cycles at all; stall retries every 3 s
+        #expect(session.restartCount >= 1)  // the stall watchdog's
+        #expect(session.restartCount <= 2)
+        #expect(session.probeCount == 0)
+        #expect(control.callAudio?.restarts == 0)
+
+        control.stop()
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+    }
+
+    /// A stop that lands while a rebuild is running waits for it, so `stop()`
+    /// never runs under a `restart()` that would re-create the tap after it.
+    @Test func stopWaitsForARunningRebuild() {
+        let control = CaptureControl()
+        let session = TapStubSession()
+        session.setProbeResult(.heardAudio)
+        session.setRestartSeconds(1.0)
+        let finished = start(session, control)
+
+        let deadline = Date().addingTimeInterval(6)
+        while !session.isRestarting, Date() < deadline { session.cycle(tapSilent: true); usleep(20_000) }
+        #expect(session.isRestarting)
+        control.stop()
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+        #expect(!session.stoppedDuringRestart)
+    }
+
     /// Zeros on the tap and the probe hears nothing either: a quiet room. The
     /// tap is probed but never rebuilt.
     @Test func zerosWithQuietProbeLeaveTheTapAlone() {
         let control = CaptureControl()
         let session = TapStubSession()
-        session.setProbeHearsAudio(false)
+        session.setProbeResult(.silent)
         let finished = start(session, control)
 
         feed(session, tapSilent: true, seconds: 3.5)

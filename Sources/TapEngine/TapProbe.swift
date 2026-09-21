@@ -14,13 +14,21 @@ public protocol TapHealthCaptureSession: CaptureSession {
     var onTapActivity: (@Sendable (_ silent: Bool) -> Void)? { get set }
     /// False when the tap is its own clock (no mic): nothing to monitor.
     var reportsTapActivity: Bool { get }
-    /// Builds a throwaway tap with the session's scope, listens for up to
-    /// `maxSeconds`, and returns true as soon as it hears a non-silent sample.
-    /// Blocks the caller; never touches the live capture.
-    func probeTap(maxSeconds: Double) -> Bool
+    /// Builds a throwaway tap with the session's scope and listens for up to
+    /// `maxSeconds`, returning as soon as it hears a non-silent sample. Blocks
+    /// the caller; never touches the live capture.
+    func probeTap(maxSeconds: Double) -> TapProbeResult
     /// One line describing the tap and the output device, for the log line
     /// written when a tap is found dead.
     var tapDiagnostics: String { get }
+}
+
+public enum TapProbeResult: Sendable, Equatable {
+    case heardAudio
+    case silent
+    /// The throwaway tap could not be built or started, so it says nothing
+    /// about the live one.
+    case failed(String)
 }
 
 /// Tap-side level check shared by the live IOProc and the probe.
@@ -40,8 +48,9 @@ enum TapLevel {
 /// A second, short-lived tap + tap-only private aggregate used to check
 /// whether the system is producing audio right now.
 enum TapProbe {
-    static func hearsAudio(scope: TapScope, maxSeconds: Double) -> Bool {
-        guard let tap = try? ProcessTap(scope: scope) else { return false }
+    static func listen(scope: TapScope, maxSeconds: Double) -> TapProbeResult {
+        let tap: ProcessTap
+        do { tap = try ProcessTap(scope: scope) } catch { return .failed("\(error)") }
         defer { tap.destroy() }
 
         let composition: [String: Any] = [
@@ -54,17 +63,17 @@ enum TapProbe {
             ],
         ]
         var aggregateID = AudioObjectID(kAudioObjectUnknown)
-        guard
-            AudioHardwareCreateAggregateDevice(composition as CFDictionary, &aggregateID) == noErr,
-            aggregateID != kAudioObjectUnknown
-        else { return false }
+        var status = AudioHardwareCreateAggregateDevice(composition as CFDictionary, &aggregateID)
+        guard status == noErr, aggregateID != kAudioObjectUnknown else {
+            return .failed("\(TapEngineError.aggregateCreationFailed(status))")
+        }
         defer { AudioHardwareDestroyAggregateDevice(aggregateID) }
 
         let heard = DispatchSemaphore(value: 0)
         let once = NSLock()
         nonisolated(unsafe) var signalled = false
         var ioProcID: AudioDeviceIOProcID?
-        let status = AudioDeviceCreateIOProcIDWithBlock(
+        status = AudioDeviceCreateIOProcIDWithBlock(
             &ioProcID, aggregateID, DispatchQueue(label: "hark.tap.probe")
         ) { _, inInputData, _, _, _ in
             let buffers = UnsafeMutableAudioBufferListPointer(
@@ -76,12 +85,15 @@ enum TapProbe {
             once.unlock()
             if first { heard.signal() }
         }
-        guard status == noErr, let ioProcID else { return false }
+        guard status == noErr, let ioProcID else {
+            return .failed("\(TapEngineError.ioProcFailed(status))")
+        }
         defer { AudioDeviceDestroyIOProcID(aggregateID, ioProcID) }
 
-        guard AudioDeviceStart(aggregateID, ioProcID) == noErr else { return false }
+        status = AudioDeviceStart(aggregateID, ioProcID)
+        guard status == noErr else { return .failed("\(TapEngineError.ioProcFailed(status))") }
         defer { AudioDeviceStop(aggregateID, ioProcID) }
-        return heard.wait(timeout: .now() + maxSeconds) == .success
+        return heard.wait(timeout: .now() + maxSeconds) == .success ? .heardAudio : .silent
     }
 
     /// "output <id> [<uid>] @ <rate> Hz" for the current default output device.

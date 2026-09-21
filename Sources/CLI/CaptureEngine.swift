@@ -163,6 +163,7 @@ struct CaptureEngine {
             return monitor
         }()
         let probeQueue = DispatchQueue(label: "hark.capture.tapprobe")
+        let probeFailureLogged = LockBox<Bool>()
 
         // --duration counts captured audio, not wall clock: the budget trims
         // the final chunk so the output holds exactly the requested length
@@ -273,12 +274,14 @@ struct CaptureEngine {
 
         // Drive the stall watchdog on a 1 s cadence while capturing.
         var stallTimer: DispatchSourceTimer?
+        let watchdogQueue = DispatchQueue(label: "hark.capture.watchdog")
         if let watchdog {
-            let timer = DispatchSource.makeTimerSource(
-                queue: DispatchQueue(label: "hark.capture.watchdog"))
+            let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
             timer.schedule(deadline: .now() + 1, repeating: 1)
             timer.setEventHandler {
-                watchdog.setPaused(control?.isPaused == true)
+                let paused = control?.isPaused == true
+                watchdog.setPaused(paused)
+                var stallRestarted = false
                 switch watchdog.tick() {
                 case .none:
                     break
@@ -287,6 +290,7 @@ struct CaptureEngine {
                         Log.notice("capture interrupted (display sleep/lock?) — attempting to resume…")
                     }
                     _ = session.restart()
+                    stallRestarted = true
                 case .resumed:
                     Log.notice("capture resumed")
                 case .giveUp:
@@ -295,12 +299,28 @@ struct CaptureEngine {
                 }
                 guard let tapMonitor, let tapSession = session as? TapHealthCaptureSession
                 else { return }
+                // A paused recording is never probed or rebuilt, and a tick in
+                // which the stall watchdog already rebuilt the tap is left alone.
+                tapMonitor.setPaused(paused)
+                guard !stallRestarted else { return }
                 switch tapMonitor.tick() {
                 case .none:
                     break
                 case .probe:
                     probeQueue.async {
-                        tapMonitor.probeFinished(heardAudio: tapSession.probeTap(maxSeconds: 3))
+                        let result = tapSession.probeTap(maxSeconds: 3)
+                        // A probe that can't be built says nothing about the live
+                        // tap: say so once, and treat it as quiet (no rebuild).
+                        if case .failed(let reason) = result, probeFailureLogged.get() != true {
+                            probeFailureLogged.set(true)
+                            Log.notice(
+                                "could not check the system audio tap (\(reason)); "
+                                    + "a dead tap would go unnoticed")
+                        }
+                        Log.verbose(
+                            "tap check after \(Int(tapMonitor.status().silentFor)) s of zeros: "
+                                + "a fresh tap \(result == .heardAudio ? "hears audio" : "hears nothing")")
+                        tapMonitor.probeFinished(heardAudio: result == .heardAudio)
                     }
                 case .restart(let silentFor, let attempt):
                     Log.notice(
@@ -334,7 +354,16 @@ struct CaptureEngine {
         // agent's capture queue. On timeout we log and finalize anyway, so the
         // audio captured so far is still written and playable.
         stopping.set(true)
-        if !Self.runBounded(teardownTimeout, label: "stopping the audio stream", { session.stop() }) {
+        // Cancelling the timer doesn't wait for a handler that is mid-rebuild,
+        // and a `restart()` still running when `stop()` returns would leave a
+        // live tap behind. The queue is drained inside the same bounded stop.
+        if !Self.runBounded(
+            teardownTimeout, label: "stopping the audio stream",
+            {
+                watchdogQueue.sync {}
+                session.stop()
+            })
+        {
             Log.error("""
                 the audio stream did not stop within \
                 \(ConfigKey.formatNumber(teardownTimeout))s; finalizing the recording anyway. \

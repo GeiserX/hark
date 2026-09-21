@@ -334,8 +334,8 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCap
         }
     }
 
-    public func probeTap(maxSeconds: Double) -> Bool {
-        TapProbe.hearsAudio(scope: scope, maxSeconds: maxSeconds)
+    public func probeTap(maxSeconds: Double) -> TapProbeResult {
+        TapProbe.listen(scope: scope, maxSeconds: maxSeconds)
     }
 
     public var tapDiagnostics: String {

@@ -13,6 +13,7 @@ import Foundation
 /// Pure decision logic over an injected clock, like `StallWatchdog`; the owner
 /// (`CaptureEngine.run`) runs the probe and the restart. The contract:
 ///   * `observe(silent:)` once per IO cycle of the tap stream.
+///   * `setPaused(_:)` so a paused recording is never probed or rebuilt.
 ///   * `tick()` on a fixed cadence; act on the returned `Action`.
 ///   * `probeFinished(heardAudio:)` when a probe asked for by `tick()` ends.
 ///
@@ -20,7 +21,9 @@ import Foundation
 /// every further 6x of it (10 s, 30 s, 60 s, then each minute). Restarts ride
 /// the same schedule, so a restart that does not bring audio back is retried
 /// at a widening interval and at most `maxRestarts` times per zero run. Any
-/// non-silent cycle ends the run and resets all of it.
+/// non-silent cycle ends the run and resets all of it. So does the stream
+/// going quiet altogether: when cycles stop arriving the capture has stalled,
+/// which is the stall watchdog's case, and this monitor stands aside.
 final class TapSilenceMonitor: @unchecked Sendable {
     enum State: String, Sendable {
         /// Audio is flowing, or the zero run is still too short to question.
@@ -61,6 +64,9 @@ final class TapSilenceMonitor: @unchecked Sendable {
     private var state = State.ok
     private var restarts = 0
     private var runStartedAt: Date?
+    private var lastSilentCycleAt: Date?
+    /// A zero run with no cycle for this long is a stalled stream, not a silent one.
+    private var staleSeconds: Double { min(2, silenceSeconds) }
     /// Bumped whenever a zero run ends, so a probe that outlives its run is ignored.
     private var runID = 0
     private var probesDone = 0
@@ -68,6 +74,7 @@ final class TapSilenceMonitor: @unchecked Sendable {
     private var probingRunID: Int?
     private var confirmAt: Date?
     private var announcedGiveUp = false
+    private var paused = false
 
     init(
         silenceSeconds: Double = 10,
@@ -94,8 +101,11 @@ final class TapSilenceMonitor: @unchecked Sendable {
     func observe(silent: Bool) {
         lock.lock()
         defer { lock.unlock() }
+        guard !paused else { return }
         if silent {
-            if runStartedAt == nil { runStartedAt = now() }
+            let t = now()
+            if runStartedAt == nil { runStartedAt = t }
+            lastSilentCycleAt = t
             return
         }
         guard runStartedAt != nil else { return }
@@ -104,6 +114,21 @@ final class TapSilenceMonitor: @unchecked Sendable {
         } else if state != .recovered {
             state = .ok
         }
+        endRun()
+    }
+
+    /// Tracks pause state. Pausing ends the current zero run (a probe still in
+    /// flight is ignored), and nothing is observed or asked for while paused, so
+    /// a zero run never ages across a pause. Only acts on a transition.
+    func setPaused(_ value: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard value != paused else { return }
+        paused = value
+        if value, runStartedAt != nil { endRun() }
+    }
+
+    private func endRun() {
         runStartedAt = nil
         runID += 1
         probesDone = 0
@@ -115,8 +140,12 @@ final class TapSilenceMonitor: @unchecked Sendable {
     func tick() -> Action {
         lock.lock()
         defer { lock.unlock() }
-        guard let runStartedAt else { return .none }
+        guard !paused, let runStartedAt else { return .none }
         let t = now()
+        if let last = lastSilentCycleAt, t.timeIntervalSince(last) > staleSeconds {
+            endRun()
+            return .none
+        }
         let age = t.timeIntervalSince(runStartedAt)
 
         // A probe heard audio. The live tap gets a moment to show the same

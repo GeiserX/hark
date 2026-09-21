@@ -125,6 +125,8 @@ zeros, the recording's tap is rebuilt and the same file continues, with one
 line on stderr naming the output device and formats. If it hears nothing
 either, nothing happens, and it looks again at 30 s, 60 s, and then every
 minute until audio returns. At most five rebuilds are tried per silent stretch.
+A paused recording is never checked or rebuilt, and a check that cannot be set up
+is reported once on stderr and counts as hearing nothing.
 The remote-control agent reports this as `callAudio` in `GET /status`.
 
 Stopping is also bounded: if the audio stream can't be torn down (most often a
