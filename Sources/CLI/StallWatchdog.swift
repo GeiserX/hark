@@ -4,10 +4,13 @@ import Foundation
 /// directly in tests. `HARK_NO_RECOVER` disables recovery; `HARK_STALL_SECONDS`
 /// sets how long a silence is tolerated before resuming (default 3 s);
 /// `HARK_RECOVER_TIMEOUT` (default 0 = never) bounds retries before a clean stop.
+/// `HARK_TAP_SILENCE_SECONDS` (default 10) is how long the system tap may
+/// deliver zeros before `TapSilenceMonitor` first probes it.
 struct RecoverySettings: Sendable, Equatable {
     var enabled: Bool
     var stallSeconds: Double
     var giveUpSeconds: Double
+    var tapSilenceSeconds: Double = 10
 
     static func fromEnvironment(
         _ env: [String: String] = ProcessInfo.processInfo.environment
@@ -19,7 +22,8 @@ struct RecoverySettings: Sendable, Equatable {
         return RecoverySettings(
             enabled: !truthy(env["HARK_NO_RECOVER"]),
             stallSeconds: env["HARK_STALL_SECONDS"].flatMap(Double.init) ?? 3,
-            giveUpSeconds: env["HARK_RECOVER_TIMEOUT"].flatMap(Double.init) ?? 0)
+            giveUpSeconds: env["HARK_RECOVER_TIMEOUT"].flatMap(Double.init) ?? 0,
+            tapSilenceSeconds: env["HARK_TAP_SILENCE_SECONDS"].flatMap(Double.init) ?? 10)
     }
 }
 

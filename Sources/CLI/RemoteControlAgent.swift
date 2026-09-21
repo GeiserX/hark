@@ -339,7 +339,7 @@ private struct ActionResponse: Encodable {
     }
 }
 
-private struct StatusResponse: Encodable {
+struct StatusResponse: Encodable {
     struct Agent: Encodable {
         let version: String
         let address: String
@@ -352,6 +352,13 @@ private struct StatusResponse: Encodable {
         let audio: String?
         let transcript: String?
         let error: String?
+        let callAudio: CallAudio?
+    }
+    /// Whether the call's audio (the system tap) is still being heard.
+    struct CallAudio: Encodable {
+        let state: String
+        let silentFor: Double
+        let restarts: Int
     }
     let agent: Agent
     let session: Session?
@@ -362,7 +369,13 @@ private struct StatusResponse: Encodable {
             Session(
                 id: $0.id, state: $0.state.rawValue, muted: $0.muted,
                 elapsed: Date().timeIntervalSince($0.startedAt),
-                audio: $0.audio, transcript: $0.transcript, error: $0.error)
+                audio: $0.audio, transcript: $0.transcript, error: $0.error,
+                callAudio: $0.callAudio.map {
+                    CallAudio(
+                        state: $0.state.rawValue,
+                        silentFor: ($0.silentFor * 10).rounded() / 10,
+                        restarts: $0.restarts)
+                })
         }
     }
 }

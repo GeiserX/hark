@@ -138,7 +138,8 @@ curl -s http://127.0.0.1:8473/status
     "elapsed": 12.4,
     "audio": "meeting.m4a",
     "transcript": "meeting.srt",
-    "error": null
+    "error": null,
+    "callAudio": { "state": "ok", "silentFor": 0, "restarts": 0 }
   }
 }
 ```
@@ -146,6 +147,21 @@ curl -s http://127.0.0.1:8473/status
 `session` is omitted before the first recording. `state` is one of `recording`,
 `paused`, `stopped`, `failed`. `muted` reflects the microphone mute toggle (see
 `/mute`).
+
+`callAudio` says whether the system-audio side of a tap + microphone capture is
+still being heard. It is present only for those captures (Core Audio backend
+with `mix`); a microphone-only or system-only session omits it.
+
+| `state` | meaning |
+| --- | --- |
+| `ok` | audio is arriving, or has been silent for under 10 s |
+| `silent` | the tap delivers zeros and a second, throwaway tap hears nothing either: nobody is talking |
+| `dead` | the throwaway tap hears audio the recording does not. The tap is being rebuilt, or a rebuild has not brought audio back yet |
+| `recovered` | audio came back after a rebuild. Stays until the next long silence is judged |
+
+`silentFor` is the length in seconds of the current run of zeros (0 while audio
+flows). `restarts` counts tap rebuilds since the session began. The recording
+is never stopped over this; see [Interruptions](reference.md#interruptions).
 
 **Wedged captures.** `POST /stop` reports `stopped` optimistically; the capture
 worker confirms it. If the worker doesn't finish within `$HARK_STOP_TIMEOUT`

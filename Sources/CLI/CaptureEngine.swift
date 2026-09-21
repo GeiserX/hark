@@ -148,6 +148,22 @@ struct CaptureEngine {
             ? StallWatchdog(stallSeconds: recovery.stallSeconds, giveUpSeconds: recovery.giveUpSeconds)
             : nil
 
+        // Dead-tap monitor: with a mic clocking the capture, a tap that dies
+        // keeps delivering buffers full of zeros, which the stall watchdog
+        // can't see. Zeros are also what a quiet call looks like, so a long
+        // zero run is checked against a throwaway second tap before anything
+        // is restarted (see `TapSilenceMonitor`).
+        let tapMonitor: TapSilenceMonitor? = {
+            guard recovery.enabled, let tapSession = session as? TapHealthCaptureSession,
+                tapSession.reportsTapActivity
+            else { return nil }
+            let monitor = TapSilenceMonitor(silenceSeconds: recovery.tapSilenceSeconds)
+            tapSession.onTapActivity = { monitor.observe(silent: $0) }
+            control?.setCallAudioSource { monitor.status() }
+            return monitor
+        }()
+        let probeQueue = DispatchQueue(label: "hark.capture.tapprobe")
+
         // --duration counts captured audio, not wall clock: the budget trims
         // the final chunk so the output holds exactly the requested length
         // regardless of engine spin-up latency.
@@ -276,6 +292,27 @@ struct CaptureEngine {
                 case .giveUp:
                     Log.notice("capture could not be resumed; stopping")
                     done.signal()
+                }
+                guard let tapMonitor, let tapSession = session as? TapHealthCaptureSession
+                else { return }
+                switch tapMonitor.tick() {
+                case .none:
+                    break
+                case .probe:
+                    probeQueue.async {
+                        tapMonitor.probeFinished(heardAudio: tapSession.probeTap(maxSeconds: 3))
+                    }
+                case .restart(let silentFor, let attempt):
+                    Log.notice(
+                        "system audio tap went dead: \(Int(silentFor)) s of zeros while a fresh "
+                            + "tap hears audio — rebuilding it (attempt \(attempt)); "
+                            + tapSession.tapDiagnostics)
+                    _ = session.restart()
+                case .gaveUp(let silentFor):
+                    Log.notice(
+                        "system audio tap still dead after \(Int(silentFor)) s and repeated "
+                            + "rebuilds; recording continues without further rebuilds until "
+                            + "audio returns; " + tapSession.tapDiagnostics)
                 }
             }
             timer.resume()

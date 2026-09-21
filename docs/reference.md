@@ -115,6 +115,18 @@ change — the stream is restarted and recording resumes (tunable via
 `$HARK_STALL_SECONDS`, `$HARK_RECOVER_TIMEOUT`; disable with `$HARK_NO_RECOVER`).
 Pair with `--keep-awake` to avoid idle sleep entirely.
 
+A system tap recorded together with a microphone can also die without any
+interruption: buffers keep arriving, full of zeros on the system side, while the
+audio keeps playing in your headphones. Zeros alone are normal (a call where
+nobody talks is exact digital silence), so hark never restarts on silence.
+After 10 s of zeros (`$HARK_TAP_SILENCE_SECONDS`) it opens a second, throwaway
+tap for up to 3 s. If that tap hears audio while the recording still gets
+zeros, the recording's tap is rebuilt and the same file continues, with one
+line on stderr naming the output device and formats. If it hears nothing
+either, nothing happens, and it looks again at 30 s, 60 s, and then every
+minute until audio returns. At most five rebuilds are tried per silent stretch.
+The remote-control agent reports this as `callAudio` in `GET /status`.
+
 Stopping is also bounded: if the audio stream can't be torn down (most often a
 missing or stale **System Audio Recording** grant, which has been seen to block
 the Core Audio teardown indefinitely), hark reports it and finalizes the
