@@ -94,7 +94,7 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
             gapSeconds: gapSeconds, maxLineSeconds: maxLineSeconds)
         // One continuous resampler for the whole call: per-chunk resampling drifts
         // against the capture clock, which would misplace every timestamp. Same
-        // construction as the VAD path (`SpeechSegmenterFactory.make`) — identity
+        // construction as the VAD path (`SpeechSegmenterFactory.make`): identity
         // at 16 kHz, since `unpackMono` has already folded the channels.
         var resampler: StreamResampler = IdentityResampler()
         if captureFormat.sampleRate != 16000,

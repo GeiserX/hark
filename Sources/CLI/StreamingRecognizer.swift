@@ -69,7 +69,7 @@ enum SentencePieceText {
 }
 
 /// Where an append-only token stream breaks into transcript lines. Pure: no
-/// audio, no models, no clock of its own — the caller supplies how much audio the
+/// audio, no models, no clock of its own; the caller supplies how much audio the
 /// recognizer has actually decoded.
 ///
 /// `finalized` is the watermark: every token before it is already written to the

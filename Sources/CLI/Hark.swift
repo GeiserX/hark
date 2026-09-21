@@ -735,8 +735,10 @@ struct Hark: ParsableCommand {
         // Opt-in streaming transcription (`--live-streaming`): loaded here, before
         // any permission prompt, so a missing model or an unsupported language
         // fails (or falls back) while nothing is recording yet. nil means the
-        // segmented path runs, exactly as before.
-        let streaming = makeStreamingModels(settings: settings, plan: speakerPlan)
+        // segmented path runs, exactly as before. Without a transcript output
+        // there is nothing to stream into, so the models are not loaded at all.
+        let streaming = makeStreamingModels(
+            settings: settings, plan: speakerPlan, hasTranscript: outputs.transcript != nil)
 
         // Fail fast on an unusable transcription engine before touching audio
         // permissions or starting capture: whisper resolves its binary+model
@@ -971,13 +973,23 @@ struct Hark: ParsableCommand {
         return .stereo
     }
 
+    /// Whether `--live-streaming` has anything to do: it is on, and there is a
+    /// transcript output for the closed lines to go into. `hark -o audio.opus`
+    /// with `live-streaming true` in the config must not pull a 612 MB model it
+    /// would never feed. Pure, for testing.
+    static func streamingRequested(settings: ResolvedSettings, hasTranscript: Bool) -> Bool {
+        settings.liveStreaming && hasTranscript
+    }
+
     /// Loads the shared streaming ASR models when `--live-streaming` is on, or
     /// returns nil so the segmented path runs unchanged. nil is always a valid
     /// answer: streaming is opt-in and must never cost a recording.
     private func makeStreamingModels(
-        settings: ResolvedSettings, plan: LivePlan
+        settings: ResolvedSettings, plan: LivePlan, hasTranscript: Bool
     ) -> NemotronStreamingModels? {
-        guard settings.liveStreaming else { return nil }
+        guard Self.streamingRequested(settings: settings, hasTranscript: hasTranscript) else {
+            return nil
+        }
         // The offline diarizer writes the whole transcript at stop from recorded
         // WAVs, so there is no live line for a streaming recognizer to feed.
         switch plan {

@@ -33,7 +33,7 @@ private func token(_ piece: String, _ start: Double) -> RecognizedToken {
 
 /// Deterministic stand-in for the streaming ASR model: each scripted token
 /// becomes visible once the given number of seconds has been fed, and the token
-/// list only grows — the same contract the real recognizer has. Lets the sink's
+/// list only grows, the same contract the real recognizer has. Lets the sink's
 /// line-cutting, transcript writing and partial publishing be tested without
 /// CoreML and without audio.
 private final class ScriptedStreamingRecognizer: StreamingRecognizer, @unchecked Sendable {
@@ -323,7 +323,7 @@ struct StreamingTranscriptionTests {
     }
 
     /// With streaming off there is no partial, and the key is absent rather than
-    /// null — so the payload stays byte-identical to the pre-streaming agent.
+    /// null, so the payload stays byte-identical to the pre-streaming agent.
     @Test func statusOmitsThePartialKeyWhenThereIsNone() throws {
         let snapshot = RemoteSessionManager.Snapshot(
             id: "s1", state: .recording, startedAt: Date(), audio: nil,
@@ -394,6 +394,17 @@ struct StreamingSettingsTests {
                 .validate()
         }
         #expect(throws: Never.self) { try resolve(["--live-streaming"]).validate() }
+    }
+
+    /// Without a transcript output there is nothing to stream into, so the models
+    /// must not be loaded (a 612 MB download on first use) for an audio-only run
+    /// that has `live-streaming true` in its config.
+    @Test func streamsOnlyWhenATranscriptIsWritten() throws {
+        let on = try resolve(["--live-streaming"])
+        #expect(Hark.streamingRequested(settings: on, hasTranscript: true))
+        #expect(!Hark.streamingRequested(settings: on, hasTranscript: false))
+        let off = try resolve([])
+        #expect(!Hark.streamingRequested(settings: off, hasTranscript: true))
     }
 
     /// A file is transcribed in one pass, so the flag has nothing to stream.
