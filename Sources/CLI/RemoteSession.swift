@@ -43,6 +43,9 @@ final class RemoteSessionManager: @unchecked Sendable {
         /// Whether the microphone is currently muted (orthogonal to `state`).
         var muted: Bool
         var error: String?
+        /// Health of the call-audio (system tap) side; nil when the capture
+        /// doesn't monitor it. Live while the session runs, frozen at its end.
+        var callAudio: TapSilenceMonitor.Status? = nil
         /// The open transcript line while `--live-streaming` is on, filled by
         /// `current()` from the live capture control. Never persisted with the
         /// snapshot: a stopped session has no open line.
@@ -91,8 +94,9 @@ final class RemoteSessionManager: @unchecked Sendable {
     /// it can never outlive the capture that produced it.
     func current() -> Snapshot? {
         lock.lock(); defer { lock.unlock() }
-        var snap = snapshot
-        if snap?.state == .recording { snap?.partial = control?.partialLine }
+        guard var snap = snapshot else { return nil }
+        if snap.state == .recording { snap.partial = control?.partialLine }
+        if let live = control?.callAudio { snap.callAudio = live }
         return snap
     }
 
@@ -195,6 +199,8 @@ final class RemoteSessionManager: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard var snap = snapshot, snap.id == id else { return }
         workerRunning = false
+        snap.callAudio = control?.callAudio
+        snapshot = snap
         control = nil
         guard snap.state != .failed || snap.error == nil else { return }
         snap.state = error == nil ? .stopped : .failed

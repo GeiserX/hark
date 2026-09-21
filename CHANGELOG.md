@@ -29,6 +29,20 @@ All notable changes to Hark are documented here. The format is loosely based on
   VAD and the amplitude (`--no-vad`) paths honour them. The pause must be 0–5 s,
   the window 1–60 s and greater than the pause. Defaults are unchanged.
 ### Fixed
+- A `--system --mix` recording no longer loses the system side silently. On a
+  real 71-minute call the tap went to exact digital silence twice while the
+  call kept playing and hark kept reporting `recording`: with the microphone
+  clocking the capture, buffers kept arriving (zeros on the tap side), so the
+  stall watchdog never fired. Silence alone is no signal, since the same
+  recording holds legitimate zero runs of over two minutes. So after 10 s of zeros
+  (`$HARK_TAP_SILENCE_SECONDS`) hark opens a throwaway second tap for up to 3 s:
+  if it hears audio the recording does not, the tap is rebuilt and the same
+  file continues; if it hears nothing, nothing happens and it looks again at
+  30 s, 60 s, then every minute. Rebuilds are capped at five per silent stretch
+  and never stop the recording. `GET /status` gains
+  `session.callAudio` = `{state: ok|silent|dead|recovered, silentFor, restarts}`.
+  Why the tap dies is still unknown; the rebuild logs the output device, its
+  sample rate and the tap format to help find out.
 - Diarized batch transcription (`hark -i FILE --speakers`, and the end-of-capture
   `--diarize-engine offline` pass) no longer loses short utterances. It only
   transcribed audio that fell inside a diarizer segment, and FluidAudio discarded

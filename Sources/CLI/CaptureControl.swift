@@ -16,6 +16,7 @@ final class CaptureControl: @unchecked Sendable {
     private var stopped = false
     private var pauses: UInt64 = 0
     private var onStop: (() -> Void)?
+    private var callAudioSource: (@Sendable () -> TapSilenceMonitor.Status)?
     /// The open (not yet finalized) transcript line per capture source, with a
     /// monotonic `seq` so the newest one can be identified. Only
     /// `--live-streaming` writes here; with streaming off the map stays empty and
@@ -53,6 +54,21 @@ final class CaptureControl: @unchecked Sendable {
     var isStopped: Bool {
         lock.lock(); defer { lock.unlock() }
         return stopped
+    }
+
+    /// Health of the system-audio side, when the capture monitors it (a tap
+    /// with a mic; see `TapSilenceMonitor`). nil otherwise.
+    var callAudio: TapSilenceMonitor.Status? {
+        lock.lock()
+        let source = callAudioSource
+        lock.unlock()
+        return source?()
+    }
+
+    /// `CaptureEngine.run` installs the monitor's status reader.
+    func setCallAudioSource(_ source: @escaping @Sendable () -> TapSilenceMonitor.Status) {
+        lock.lock(); defer { lock.unlock() }
+        callAudioSource = source
     }
 
     /// `CaptureEngine.run` installs a handler to wake its wait loop. If a stop

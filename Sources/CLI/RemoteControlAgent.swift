@@ -357,6 +357,13 @@ struct StatusResponse: Encodable {
         /// capture is recording. Optional, so with streaming off the key is
         /// absent and the payload is byte-identical to before.
         let partial: PartialLine?
+        let callAudio: CallAudio?
+    }
+    /// Whether the call's audio (the system tap) is still being heard.
+    struct CallAudio: Encodable {
+        let state: String
+        let silentFor: Double
+        let restarts: Int
     }
     let agent: Agent
     let session: Session?
@@ -368,7 +375,13 @@ struct StatusResponse: Encodable {
                 id: $0.id, state: $0.state.rawValue, muted: $0.muted,
                 elapsed: Date().timeIntervalSince($0.startedAt),
                 audio: $0.audio, transcript: $0.transcript, error: $0.error,
-                partial: $0.partial)
+                partial: $0.partial,
+                callAudio: $0.callAudio.map {
+                    CallAudio(
+                        state: $0.state.rawValue,
+                        silentFor: ($0.silentFor * 10).rounded() / 10,
+                        restarts: $0.restarts)
+                })
         }
     }
 }

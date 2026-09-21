@@ -13,6 +13,7 @@ import Foundation
 /// Reading a tap requires the "System Audio Recording" TCC permission; for
 /// command-line tools macOS attributes it to the launching terminal.
 public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCaptureSession,
+    TapHealthCaptureSession,
     @unchecked Sendable
 {
     private let scope: TapScope
@@ -35,6 +36,17 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCap
     /// stream becomes system-only) and the separated `.microphone` source is
     /// silenced — system audio keeps recording (interactive mute, PRD §6.9).
     public var micMuted: (@Sendable () -> Bool)?
+    /// Reports, once per IO cycle, whether the tap stream was digitally silent
+    /// (`TapHealthCaptureSession`). Only invoked when a mic clocks the aggregate.
+    public var onTapActivity: (@Sendable (_ silent: Bool) -> Void)?
+    public var reportsTapActivity: Bool { micDeviceUID != nil }
+    /// Default output device as it was when the current tap was built.
+    private var outputAtConfigure = ""
+    /// Debug aid (`HARK_DEBUG_KILL_TAP_AFTER=<seconds>`): zero the first tap's
+    /// stream after that long, to exercise dead-tap recovery end to end. A
+    /// rebuilt tap is never zeroed.
+    private var killTapAfter: Double? =
+        ProcessInfo.processInfo.environment["HARK_DEBUG_KILL_TAP_AFTER"].flatMap(Double.init)
     /// Stored so the tap/aggregate/IOProc can be rebuilt after an interruption.
     private var onAudio: (@Sendable (Data) -> Void)?
     private let ioQueue = DispatchQueue(label: "hark.tap.io")
@@ -168,6 +180,11 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCap
                 inputFormat: tapFormat, outputFormat: outputFormat)
         }
 
+        outputAtConfigure = TapProbe.defaultOutputDescription()
+        let reportTapActivity = reportsTapActivity
+        let killTapAt = killTapAfter.map { Date().addingTimeInterval($0) }
+        killTapAfter = nil
+
         // 4. IO callback: wrap tap bytes, convert, deliver.
         let debug = ProcessInfo.processInfo.environment["HARK_DEBUG"] != nil
         nonisolated(unsafe) var callbackCount = 0
@@ -193,6 +210,15 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCap
                 }
             }
             guard ablPointer.count > 0 else { return }
+
+            if let killTapAt, Date() >= killTapAt, let tapBuffer = ablPointer.last {
+                memset(tapBuffer.mData, 0, Int(tapBuffer.mDataByteSize))
+            }
+            if reportTapActivity, let onTapActivity = self.onTapActivity,
+                let tapBuffer = ablPointer.last
+            {
+                onTapActivity(TapLevel.isSilent(tapBuffer))
+            }
 
             // Interactive mute (PRD §6.9): drop the mic from the mix so the
             // main stream is system-only, and silence the separated mic source.
@@ -306,6 +332,15 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCap
         } catch {
             return false
         }
+    }
+
+    public func probeTap(maxSeconds: Double) -> TapProbeResult {
+        TapProbe.listen(scope: scope, maxSeconds: maxSeconds)
+    }
+
+    public var tapDiagnostics: String {
+        "tap \(sourceFormatDescription); at tap creation \(outputAtConfigure); "
+            + "now \(TapProbe.defaultOutputDescription())"
     }
 
     private func teardown() {
