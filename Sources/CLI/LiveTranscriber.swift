@@ -272,7 +272,7 @@ final class LiveTranscriber: AudioSink, @unchecked Sendable {
 
     /// whisper.cpp emits placeholder tokens for silence/non-speech segments;
     /// drop them so the transcript holds only recognized speech.
-    private static func isNonSpeech(_ text: String) -> Bool {
+    static func isNonSpeech(_ text: String) -> Bool {
         let markers = ["[BLANK_AUDIO]", "[silence]", "(silence)", "[ Silence ]", "[MUSIC]", "(buzzer)"]
         return markers.contains { text.caseInsensitiveCompare($0) == .orderedSame }
     }
