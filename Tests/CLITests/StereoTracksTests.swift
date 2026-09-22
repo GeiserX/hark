@@ -21,6 +21,23 @@ private final class CollectingSink: AudioSink, @unchecked Sendable {
     var finalizations: Int { lock.lock(); defer { lock.unlock() }; return finalizeCount }
 }
 
+/// Keeps the chunk sinks a `SplittingSink` asks for, so a test can see the files
+/// a `--split` run would have written.
+private final class ChunkFactory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sinks: [CollectingSink] = []
+
+    func make(_ index: Int) -> AudioSink {
+        lock.lock()
+        defer { lock.unlock() }
+        let sink = CollectingSink(label: "call_\(String(format: "%03d", index)).wav")
+        sinks.append(sink)
+        return sink
+    }
+
+    var chunks: [CollectingSink] { lock.lock(); defer { lock.unlock() }; return sinks }
+}
+
 /// A sink whose every write fails, to prove what the engine does with the error.
 private final class FailingSink: AudioSink, @unchecked Sendable {
     private let error: Error
@@ -167,6 +184,79 @@ struct StereoTrackLayoutTests {
         // Mic 33 must meet system -33, not the orphaned -22 from before the pause.
         #expect(samples(sink.written, channel: 0) == [11, 33])
         #expect(samples(sink.written, channel: 1) == [-11, -33])
+    }
+
+    /// A source can deliver nothing for a whole recording: on the Core Audio
+    /// path the mixed stream still gets audio when the mic buffer is
+    /// unavailable, but the per-source callback for the mic never fires. Nothing
+    /// then pairs, so the live side must stop growing rather than buffer the
+    /// entire call and throw it away at finalize — and the run has to say so,
+    /// because the file it produced is empty.
+    @Test func aSilentSourceStopsTheQueueGrowingAndIsReported() throws {
+        let sink = CollectingSink()
+        let writer = StereoTrackWriter(sink: sink, format: Self.stereo16)
+        // 16 kHz, 16-bit, 2 ch = 64 000 B/s, so the cap is 128 000 B.
+        let cap = Int(StereoTrackWriter.maxUnpairedSeconds * Double(Self.stereo16.byteRate))
+        let chunk = Data(count: 6400)  // 0.1 s
+        let seconds = 10.0
+
+        for _ in 0..<Int(seconds / 0.1) {
+            try writer.write(chunk, from: .system)
+        }
+
+        // Ten seconds in, the queue holds two, not ten.
+        #expect(
+            writer.unpairedBytes <= cap + chunk.count,
+            "queue held \(writer.unpairedBytes) B, cap is \(cap) B")
+        #expect(
+            writer.droppedUnpairedBytes
+                == UInt64(Int(seconds * Double(Self.stereo16.byteRate)) - writer.unpairedBytes))
+
+        try writer.finalize()
+        #expect(sink.bytesWritten == 0)  // nothing ever paired
+        #expect(sink.finalizations == 1)
+    }
+
+    /// The bound must not fire on a normal capture: a skew of a chunk or two
+    /// between the two callbacks is ordinary and all of it has to be kept.
+    @Test func ordinarySkewIsKeptWhole() throws {
+        let sink = CollectingSink()
+        let writer = StereoTrackWriter(sink: sink, format: Self.stereo16)
+        let chunk = Data(fromInt16: Array(repeating: 500, count: 3200))  // 0.1 s
+
+        for _ in 0..<3 { try writer.write(chunk, from: .microphone) }
+        try writer.write(chunk, from: .system)
+
+        #expect(writer.droppedUnpairedBytes == 0)
+        #expect(sink.bytesWritten == UInt64(chunk.count))  // the first 0.1 s paired
+        #expect(writer.unpairedBytes == 2 * chunk.count)  // the rest still waiting
+    }
+
+    /// The PRD promises `--split` chunks the interleaved stream, and nothing
+    /// covered it. `--split` sits *under* the layout in the real wiring — the
+    /// writer's sink is whatever `makeAudioSink` built, including a
+    /// `SplittingSink` — and the interleaved stream carries the same byte count
+    /// per second as the summed one, so the chunks rotate at the same instant
+    /// they would without the layout.
+    @Test func splitRotatesTheInterleavedStreamOnTheSameBoundaries() throws {
+        let factory = ChunkFactory()
+        // 16 kHz 16-bit stereo = 64 000 B/s, so 0.01 s is a 640-byte chunk.
+        let split = SplittingSink(
+            chunkSeconds: 0.01, format: Self.stereo16, label: "call.wav",
+            makeChunkSink: { factory.make($0) })
+        let writer = StereoTrackWriter(sink: split, format: Self.stereo16)
+
+        // Five rounds of 320 B per source pair into 320 B of interleaved output
+        // each, so 1600 B in total: two full chunks and a third left short.
+        for _ in 0..<5 {
+            try writer.write(Data(repeating: 0x11, count: 320), from: .microphone)
+            try writer.write(Data(repeating: 0x22, count: 320), from: .system)
+        }
+        try writer.finalize()
+
+        #expect(factory.chunks.map(\.bytesWritten) == [640, 640, 320])
+        #expect(factory.chunks.map(\.finalizations) == [1, 1, 1])
+        #expect(factory.chunks.map(\.label) == ["call_001.wav", "call_002.wav", "call_003.wav"])
     }
 }
 
