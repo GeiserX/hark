@@ -193,7 +193,7 @@ enum BatchDiarization {
             let text = try backend.transcribe(
                 wavFile: wav, language: language, translate: translate, format: .txt)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty, !LiveTranscriber.isNonSpeech(text) else { continue }
+            guard !text.isEmpty, !isNonSpeechPlaceholder(text) else { continue }
             cues.append(
                 TranscriptCue(
                     start: segment.start, end: segment.end, text: text,

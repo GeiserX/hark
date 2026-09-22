@@ -1,3 +1,4 @@
+import AVFoundation
 import Encoders
 import FluidAudio
 import Foundation
@@ -76,9 +77,12 @@ struct DiarizedSegmentPaddingTests {
         // for its floor, so a parakeet reporting 0 pads nothing and the run dies
         // on the first sub-0.3 s span again.
         #expect(ParakeetBackend.audioFloorSeconds == ASRConstants.minimumAudioDurationSeconds)
-        // The constant, so a FluidAudio bump moves the padding with it.
-        #expect(ASRConstants.minimumAudioDurationSeconds == 0.3)
-        #expect(Int((ParakeetBackend.audioFloorSeconds * 16000).rounded(.up)) == 4800)
+        // A sanity range rather than FluidAudio's current 0.3: the point of taking
+        // the constant is that a vendor bump moves the padding with it, and an
+        // assertion on the value would redden the bump instead. What has to hold is
+        // that there is a floor at all and that it is short enough to pad up to.
+        #expect(ParakeetBackend.audioFloorSeconds > 0)
+        #expect(ParakeetBackend.audioFloorSeconds <= 1)
     }
 
     @Test func floorTravelsThroughTheSharedBackendWrapper() {
@@ -93,10 +97,10 @@ struct DiarizedSegmentPaddingTests {
     @Test func placeholderTokensFromAPaddedSpanAreNotCues() {
         // A padded 0.25 s span is mostly silence to the recognizer, so the
         // diarized path needs the same placeholder filter the live path has.
-        #expect(LiveTranscriber.isNonSpeech("[BLANK_AUDIO]"))
-        #expect(LiveTranscriber.isNonSpeech("[silence]"))
-        #expect(!LiveTranscriber.isNonSpeech("Sí."))
-        #expect(!LiveTranscriber.isNonSpeech("Yes."))
+        #expect(isNonSpeechPlaceholder("[BLANK_AUDIO]"))
+        #expect(isNonSpeechPlaceholder("[silence]"))
+        #expect(!isNonSpeechPlaceholder("Sí."))
+        #expect(!isNonSpeechPlaceholder("Yes."))
     }
 }
 
@@ -184,6 +188,128 @@ struct SayShortTurnDiarizationTests {
         #expect(!cues.isEmpty)
         #expect(cues.contains { $0.text.localizedCaseInsensitiveContains("quarterly") })
     }
+}
+
+/// The same padding on the live path. `LiveTranscriber` caught the engine's throw
+/// per segment and dropped the span with a verbose line, so a sub-floor segment
+/// was lost silently rather than aborting the run — the mirror of the batch bug,
+/// and the live VAD segmenter does emit spans under its own minimum.
+///
+/// Deterministic: a stand-in backend, the amplitude segmenter, no models.
+@Suite("Live segment padding", .serialized)
+struct LiveSegmentPaddingTests {
+    private let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
+    /// Well above anything the segmenter can emit here, so the segment is
+    /// certainly short of it and the padding is what closes the gap.
+    private let floorSeconds = 1.5
+
+    private func loud(_ seconds: Double) -> Data {
+        let samples = Int(seconds * 16000)
+        var data = Data(capacity: samples * 2)
+        for index in 0..<samples {
+            withUnsafeBytes(of: Int16(index % 2 == 0 ? 16000 : -16000).littleEndian) {
+                data.append(contentsOf: $0)
+            }
+        }
+        return data
+    }
+
+    private func quiet(_ seconds: Double) -> Data { Data(count: Int(seconds * 16000) * 2) }
+
+    /// Feeds one short speech turn to a transcriber over `backend` and returns the
+    /// transcript it wrote.
+    private func transcript(over backend: FloorEnforcingBackend) throws -> String {
+        setenv("HARK_VAD", "0", 1)  // the deterministic amplitude segmenter
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hark-livepad-\(UUID().uuidString).txt").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let writer = try LiveTranscriptWriter(destination: .file(path), format: .txt)
+        let transcriber = LiveTranscriber(
+            backend: SerializedBackend(backend), writer: writer, ownsBackend: false,
+            ownsWriter: false, speaker: nil, language: nil, translate: false,
+            captureFormat: format, silenceThresholdDBFS: -50, labelName: "t",
+            useVad: false, pauseSeconds: 0.3, maxWindowSeconds: 2, minSegmentSeconds: 0.2)
+
+        try transcriber.write(loud(0.25))
+        try transcriber.write(quiet(0.4))
+        try transcriber.finalize()
+        try transcriber.rethrowErrors()
+        try writer.close()
+        return try String(contentsOfFile: path, encoding: .utf8)
+    }
+
+    /// A segment under the engine's floor reaches the engine padded, so the speech
+    /// in it lands in the transcript instead of being dropped with a log line.
+    @Test func aShortSegmentIsPaddedInsteadOfLost() throws {
+        let backend = FloorEnforcingBackend(seconds: floorSeconds)
+
+        let contents = try transcript(over: backend)
+
+        #expect(contents.contains("No."), "the short turn never reached the transcript")
+        let handed = backend.handedFrames
+        #expect(handed.count == 1, "handed \(handed)")
+        // Padded to exactly the floor, which also proves the segment was under it.
+        #expect(handed.first == Int((floorSeconds * 16000).rounded(.up)))
+    }
+
+    /// whisper, apple and whisperkit declare no floor, so their segments must reach
+    /// them exactly as the segmenter cut them.
+    @Test func aBackendWithNoFloorGetsTheSegmentUntouched() throws {
+        let backend = FloorEnforcingBackend(seconds: 0)
+
+        let contents = try transcript(over: backend)
+
+        #expect(contents.contains("No."))
+        let handed = try #require(backend.handedFrames.first)
+        #expect(handed > 0)
+        #expect(handed < Int((floorSeconds * 16000).rounded(.up)))
+    }
+
+    @Test func paddingIsFrameAlignedInTheCaptureFormat() {
+        // 44.1 kHz 16-bit stereo: 4 bytes a frame, 0.3 s is 52 920 B, already aligned.
+        let stereo = PCMFormat(sampleRate: 44100, bitsPerSample: 16, channels: 2)
+        let padded = LiveTranscriber.padToEngineFloor(Data(count: 1000), format: stereo, seconds: 0.3)
+        #expect(padded.count == 52_920)
+        #expect(padded.count % stereo.bytesPerFrame == 0)
+        #expect(padded.prefix(1000).allSatisfy { $0 == 0 })
+
+        // A segment already past the floor is returned as it came.
+        let long = Data(repeating: 7, count: 60_000)
+        #expect(LiveTranscriber.padToEngineFloor(long, format: stereo, seconds: 0.3) == long)
+        // No floor, no padding.
+        #expect(
+            LiveTranscriber.padToEngineFloor(Data(count: 10), format: stereo, seconds: 0).count == 10)
+    }
+}
+
+/// Refuses a clip under its floor the way FluidAudio's Parakeet does — a throw,
+/// not an empty result — and remembers how many frames it was handed.
+private final class FloorEnforcingBackend: TranscriptionBackend, @unchecked Sendable {
+    let capabilities = EngineCapabilities(autoDetect: true, translate: false, usesModelFile: false)
+    var label: String { "floor-enforcing" }
+    let minimumAudioSeconds: Double
+    private let lock = NSLock()
+    private var frames: [Int] = []
+
+    init(seconds: Double) { self.minimumAudioSeconds = seconds }
+
+    func transcribe(
+        wavFile: URL, language: String?, translate: Bool, format: TranscriptOutputFormat
+    ) throws -> String {
+        let length = Int((try? AVAudioFile(forReading: wavFile).length) ?? 0)
+        lock.lock()
+        frames.append(length)
+        lock.unlock()
+        guard Double(length) / 16000 >= minimumAudioSeconds else {
+            throw HarkError.software(
+                "Invalid audio data provided. Must be at least 300ms of 16kHz audio")
+        }
+        return "No."
+    }
+
+    func shutdown() {}
+
+    var handedFrames: [Int] { lock.lock(); defer { lock.unlock() }; return frames }
 }
 
 /// Declares a floor; stands in for `ParakeetBackend` without loading CoreML.
