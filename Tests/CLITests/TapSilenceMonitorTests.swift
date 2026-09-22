@@ -387,6 +387,31 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     }
 }
 
+/// A sink whose `finalize()` blocks, and which honours the bound `CaptureEngine`
+/// hands it, the way `StreamingLiveTranscriber` does. It starts out carrying the
+/// ambient teardown default, which is exactly the second bound this is about.
+private final class SlowFinalizeSink: AudioSink, DeadlineBoundedSink, @unchecked Sendable {
+    let label = "slow"
+    private let lock = NSLock()
+    private let hold: TimeInterval
+    private var budget: TimeInterval = CaptureEngine.defaultTeardownTimeout
+    private var spent: TimeInterval = 0
+
+    init(hold: TimeInterval) { self.hold = hold }
+
+    func setFinalizeTimeout(_ seconds: TimeInterval) { lock.withLock { budget = seconds } }
+    func write(_ data: Data) throws {}
+    func finalize() throws {
+        let cap = lock.withLock { budget }
+        let sleeping = cap > 0 ? min(cap, hold) : hold
+        Thread.sleep(forTimeInterval: sleeping)
+        lock.withLock { spent = sleeping }
+    }
+    /// How long `finalize()` actually blocked for.
+    var timeInFinalize: TimeInterval { lock.withLock { spent } }
+    var bytesWritten: UInt64 { 0 }
+}
+
 private final class NullSink: AudioSink, @unchecked Sendable {
     let label = "null"
     func write(_ data: Data) throws {}
@@ -407,7 +432,8 @@ struct DeadTapRecoveryTests {
     /// the zero run and the assertions fail for a reason the test isn't about.
     private func start(
         _ session: TapStubSession, _ control: CaptureControl, stallSeconds: Double = 3,
-        tapSilenceSeconds: Double = 2, teardownTimeout: Double? = nil
+        tapSilenceSeconds: Double = 2, teardownTimeout: Double? = nil,
+        sinks: [AudioSink] = [NullSink()]
     ) -> DispatchSemaphore {
         var eng = CaptureEngine(
             deviceUID: nil, rate: 16000, bits: 16, channels: 1,
@@ -421,11 +447,11 @@ struct DeadTapRecoveryTests {
         // of tens of them, and it says which budget it means.
         if let teardownTimeout { eng.teardownTimeout = teardownTimeout }
         let finished = DispatchSemaphore(value: 0)
-        let box = UncheckedSendableBox(value: (eng, session, format))
+        let box = UncheckedSendableBox(value: (eng, session, format, sinks))
         Thread.detachNewThread {
-            let (eng, session, format) = box.value
+            let (eng, session, format, sinks) = box.value
             try? eng.run(
-                session: session, format: format, into: [NullSink()], duration: nil,
+                session: session, format: format, into: sinks, duration: nil,
                 warnOnSilence: false)
             finished.signal()
         }
@@ -677,6 +703,35 @@ struct DeadTapRecoveryTests {
             while !session.stopFinished, Date() < stopDeadline { usleep(20_000) }
             #expect(session.stopFinished)
             #expect(!session.stoppedDuringRestart)
+        }
+    }
+
+    /// Both halves of the teardown wedged at once: the stream will not stop, and
+    /// the sink's finalize will not return either. They draw from one budget, so
+    /// the whole stop stays inside it.
+    ///
+    /// Two bounds of the same length would instead reach twice it. At the
+    /// defaults that is past `$HARK_STOP_TIMEOUT`, and `RemoteSession` then marks
+    /// a capture that finalized perfectly well as failed with the wedged message,
+    /// keeping that verdict even once the worker reports a clean finish.
+    @Test func aWedgedStopAndAWedgedFinalizeShareOneBudget() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setStopSeconds(10)  // will not return inside the budget
+            let sink = SlowFinalizeSink(hold: 10)  // nor will this
+            let finished = start(
+                session, control, stallSeconds: 60, teardownTimeout: 1, sinks: [sink])
+
+            feed(session, tapSilent: false, seconds: 0.3)
+            let stoppedAt = Date()
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 30) == .success)
+            let total = Date().timeIntervalSince(stoppedAt)
+            // The 1 s budget, plus the floor each later step gets so that no step
+            // ever waits forever. Nowhere near the 10 s default stop timeout.
+            #expect(total < 3, "the teardown took \(total) s")
+            #expect(sink.timeInFinalize <= 1)
         }
     }
 

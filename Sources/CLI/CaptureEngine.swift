@@ -452,6 +452,11 @@ struct CaptureEngine {
         }
         _ = Self.runBounded(teardownBudget(), label: "draining pending writes", { ioQueue.sync {} })
         for sink in sinks + sourceSinks.map(\.1) {
+            // A sink whose finalize can block draws from the same budget as
+            // everything above rather than carrying a bound of its own length:
+            // two bounds of the same length add up past `$HARK_STOP_TIMEOUT`,
+            // which is what has the agent call a clean capture wedged.
+            (sink as? DeadlineBoundedSink)?.setFinalizeTimeout(teardownBudget())
             do {
                 try sink.finalize()
             } catch {

@@ -152,21 +152,20 @@ missing or stale **System Audio Recording** grant, which has been seen to block
 the Core Audio teardown indefinitely), hark reports it and finalizes the
 recording anyway so the audio captured so far stays playable — after
 `$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely).
-Stopping the stream is one budget for all of its steps, not one per step: a tap
-rebuild or tap check still running is waited for first, in that order, and
-whatever is left goes to stopping the stream and draining pending writes. So a
-stop never overtakes a rebuild, and those steps together cannot overrun
-`$HARK_STOP_TIMEOUT` and have the agent call a finished capture wedged. The
-message names whichever step ran out of time, since a slow rebuild is not a
-permission problem.
+That is one budget for the whole teardown, not one per step. A tap rebuild or
+tap check still running is waited for first, in that order, then stopping the
+stream, then draining pending writes, then finalizing each output, each taking
+whatever is left. So a stop never overtakes a rebuild, and the teardown as a
+whole cannot overrun `$HARK_STOP_TIMEOUT` and have the agent call a finished
+capture wedged. The message names whichever step ran out of time, since a slow
+rebuild is not a permission problem.
 
-Finalizing an output gets its own bound of the same length. For a
-`--live-streaming` run that is how long the stop waits for the decoder to catch
-up, so a decoder that has fallen behind costs the last words of the transcript
-rather than the stop. Those words are dropped, not delivered late: once the bound
-expires hark stops that sink writing, so the transcript is complete and final the
-moment stop returns and a client reading it on the finished signal never sees it
-grow.
+For a `--live-streaming` run the finalize step is how long the stop waits for the
+decoder to catch up, so a decoder that has fallen behind costs the last words of
+the transcript rather than the stop. Those words are dropped, not delivered late:
+once the budget expires hark stops that sink writing, so the transcript is
+complete and final the moment stop returns and a client reading it on the
+finished signal never sees it grow.
 
 Starting has its own bound. The remote-control agent's
 [`POST /start`](remote-control.md) answers once the capture is open — with
