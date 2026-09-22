@@ -981,6 +981,37 @@ struct Hark: ParsableCommand {
         settings.liveStreaming && hasTranscript
     }
 
+    /// The settings the streaming path cannot honour, named as the user set them,
+    /// and only those that were set deliberately (flag, `$HARK_*`, or config).
+    ///
+    /// Streaming builds its sinks from `--segment-pause`/`--segment-window` only.
+    /// The recognizer is the Nemotron streaming model whatever `--engine` says,
+    /// and its encoder consumes every chunk, so nothing consults the VAD, the gain
+    /// normalizer or the amplitude threshold. Silence about that is how someone
+    /// with `engine: parakeet` in their config ends up transcribing with something
+    /// else and never hears of it. Pure, for testing.
+    static func streamingIgnoredSettings(
+        from a: Hark,
+        environment env: [String: String] = ProcessInfo.processInfo.environment,
+        config: Configuration = .load()
+    ) -> [String] {
+        var named: [String] = []
+        func check(_ name: String, _ key: ConfigKey, flag: Bool, configured: Bool) {
+            let fromEnv = env[key.environmentName].map { !$0.isEmpty } ?? false
+            if flag || fromEnv || configured { named.append(name) }
+        }
+        check("--engine", .engine, flag: a.engine != nil, configured: config.engine != nil)
+        check("--vad", .vad, flag: a.useVad != nil, configured: config.vad != nil)
+        check(
+            "--vad-threshold", .vadThreshold, flag: a.vadThreshold != nil,
+            configured: config.vadThreshold != nil)
+        check("--gain", .gain, flag: a.useGain != nil, configured: config.gain != nil)
+        check(
+            "--silence-threshold", .silenceThreshold, flag: a.silenceThreshold != nil,
+            configured: config.silenceThreshold != nil)
+        return named
+    }
+
     /// Loads the shared streaming ASR models when `--live-streaming` is on, or
     /// returns nil so the segmented path runs unchanged. nil is always a valid
     /// answer: streaming is opt-in and must never cost a recording.
@@ -1003,7 +1034,17 @@ struct Hark: ParsableCommand {
             break
         }
         do {
-            return try NemotronStreamingModels.load(language: settings.language)
+            let models = try NemotronStreamingModels.load(language: settings.language)
+            // Only once the models are in hand: a failed load falls back to the
+            // segmented path, where every one of these settings does apply.
+            let ignored = Self.streamingIgnoredSettings(from: self)
+            if !ignored.isEmpty {
+                Log.notice("""
+                    live streaming ignores \(ignored.joined(separator: ", ")): it decodes \
+                    with the streaming multilingual model and segments on its own
+                    """)
+            }
+            return models
         } catch let error as HarkError {
             Log.notice("live streaming unavailable (\(error.message)); using the segmented path")
             return nil

@@ -179,6 +179,13 @@ The open line grows in place until `--segment-pause` closes it, or
 before. The open line is written nowhere, and with `--remote-control` the agent
 serves it as `session.partial` on [`GET /status`](remote-control.md).
 
+The recognizer decodes every chunk and cuts lines out of its own token stream, so
+the streaming path ignores `-e/--engine`, `--vad`, `--vad-threshold`, `--gain` and
+`--silence-threshold`. Only `--segment-pause` and `--segment-window` still shape
+the lines. hark names any of those settings you set deliberately, by flag,
+environment or config, when it starts streaming, so a configured
+`engine: parakeet` never turns into the streaming model unannounced.
+
 Off by default. Turn it on per run, or with `$HARK_LIVE_STREAMING` or the
 `live-streaming` config key. It needs Apple Silicon and covers English, Spanish,
 French, Italian, Portuguese and German with one model, downloaded on first use

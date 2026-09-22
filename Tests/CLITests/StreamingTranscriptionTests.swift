@@ -527,6 +527,30 @@ struct StreamingSettingsTests {
         #expect(!Hark.streamingRequested(settings: off, hasTranscript: true))
     }
 
+    /// Streaming picks its own recognizer and segments on its own, so `--engine`
+    /// and the VAD/gain/threshold settings silently stop applying. Someone with
+    /// `engine: parakeet` in their config who adds `--live-streaming` transcribes
+    /// with Nemotron instead, and has to be told. Only deliberate settings count:
+    /// a default nobody chose is not worth a notice.
+    @Test func namesOnlyTheIgnoredSettingsTheUserActuallySet() throws {
+        func ignored(
+            _ args: [String], env: [String: String] = [:],
+            config: Configuration = Configuration()
+        ) throws -> [String] {
+            Hark.streamingIgnoredSettings(
+                from: try Hark.parse(args), environment: env, config: config)
+        }
+        #expect(try ignored(["--live-streaming"]) == [])
+        #expect(try ignored(["--live-streaming", "-e", "parakeet"]) == ["--engine"])
+        #expect(try ignored(["--live-streaming"], env: ["HARK_VAD": "0"]) == ["--vad"])
+        #expect(
+            try ignored(["--live-streaming"], config: Configuration(engine: "parakeet"))
+                == ["--engine"])
+        #expect(
+            try ignored(["--live-streaming", "--no-gain", "--silence-threshold=-40"])
+                == ["--gain", "--silence-threshold"])
+    }
+
     /// A file is transcribed in one pass, so the flag has nothing to stream.
     @Test func refusesFileInput() throws {
         var message = ""
