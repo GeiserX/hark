@@ -75,8 +75,6 @@ final class TapSilenceMonitor: @unchecked Sendable {
     private var restarts = 0
     private var runStartedAt: Date?
     private var lastSilentCycleAt: Date?
-    /// A zero run with no cycle for this long is a stalled stream, not a silent one.
-    private var staleSeconds: Double { min(2, silenceSeconds) }
     /// Bumped whenever a zero run ends, so a probe that outlives its run is ignored.
     private var runID = 0
     private var probesDone = 0
@@ -85,6 +83,9 @@ final class TapSilenceMonitor: @unchecked Sendable {
     private var confirmAt: Date?
     private var announcedGiveUp = false
     private var paused = false
+
+    /// A zero run with no cycle for this long is a stalled stream, not a silent one.
+    private var staleSeconds: Double { min(2, silenceSeconds) }
 
     init(
         silenceSeconds: Double = 10,

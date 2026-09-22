@@ -50,9 +50,17 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCap
     private var outputAtConfigure = ""
     /// Debug aid (`HARK_DEBUG_KILL_TAP_AFTER=<seconds>`): zero the first tap's
     /// stream after that long, to exercise dead-tap recovery end to end. A
-    /// rebuilt tap is never zeroed.
-    private var killTapAfter: Double? =
-        ProcessInfo.processInfo.environment["HARK_DEBUG_KILL_TAP_AFTER"].flatMap(Double.init)
+    /// rebuilt tap is never zeroed. Debug builds only — unlike `HARK_DEBUG`,
+    /// which only adds logging, this destroys the system half of a real
+    /// recording, so it must not be reachable in a shipped binary.
+    private var killTapAfter: Double? = {
+        #if DEBUG
+            return ProcessInfo.processInfo.environment["HARK_DEBUG_KILL_TAP_AFTER"]
+                .flatMap(Double.init)
+        #else
+            return nil
+        #endif
+    }()
     /// Stored so the tap/aggregate/IOProc can be rebuilt after an interruption.
     private var onAudio: (@Sendable (Data) -> Void)?
     private let ioQueue = DispatchQueue(label: "hark.tap.io")

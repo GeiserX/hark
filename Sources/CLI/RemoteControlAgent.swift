@@ -378,7 +378,9 @@ private struct ActionResponse: Encodable {
     }
 }
 
-/// The `GET /status` body. Internal (not private) so tests can encode it.
+/// The `GET /status` body. Internal, unlike its `private` siblings above, only
+/// so a test can construct one and check the encoded shape: `@testable import`
+/// does not lift `private`, so there is no other way to pin the wire format.
 struct StatusResponse: Encodable {
     struct Agent: Encodable {
         let version: String
