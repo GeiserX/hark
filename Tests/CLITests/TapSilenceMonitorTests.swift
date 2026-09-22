@@ -407,7 +407,7 @@ struct DeadTapRecoveryTests {
     /// the zero run and the assertions fail for a reason the test isn't about.
     private func start(
         _ session: TapStubSession, _ control: CaptureControl, stallSeconds: Double = 3,
-        tapSilenceSeconds: Double = 2
+        tapSilenceSeconds: Double = 2, teardownTimeout: Double? = nil
     ) -> DispatchSemaphore {
         var eng = CaptureEngine(
             deviceUID: nil, rate: 16000, bits: 16, channels: 1,
@@ -416,6 +416,10 @@ struct DeadTapRecoveryTests {
         eng.recovery = RecoverySettings(
             enabled: true, stallSeconds: stallSeconds, giveUpSeconds: 0,
             tapSilenceSeconds: tapSilenceSeconds)
+        // A test about a step outrunning the teardown budget shortens the budget
+        // rather than sleeping past the 5 s default: same claim, seconds instead
+        // of tens of them, and it says which budget it means.
+        if let teardownTimeout { eng.teardownTimeout = teardownTimeout }
         let finished = DispatchSemaphore(value: 0)
         let box = UncheckedSendableBox(value: (eng, session, format))
         Thread.detachNewThread {
@@ -640,8 +644,8 @@ struct DeadTapRecoveryTests {
         let control = CaptureControl()
         let session = TapStubSession()
         session.setProbeResult(.heardAudio)
-        session.setRestartSeconds(7.0)  // past the whole 5 s teardown budget
-        let finished = start(session, control, stallSeconds: 60)
+        session.setRestartSeconds(3.0)  // three times the budget below
+        let finished = start(session, control, stallSeconds: 60, teardownTimeout: 1)
 
         feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
         let deadline = Date().addingTimeInterval(15)
