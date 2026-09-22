@@ -131,6 +131,20 @@ minute until audio returns. At most five rebuilds are tried per silent stretch.
 A paused recording is never checked or rebuilt. A check that cannot be set up is
 reported once on stderr and measures nothing, so it never rebuilds the tap and
 is not read as a quiet room either; `callAudio` says `unknown` for it.
+
+Two cases are deliberately left alone rather than judged, because in both of
+them the check has measured nothing and a rebuild would only tear a tap down
+and build it again for the whole recording:
+
+- **A tap that has never been heard.** Only a tap that delivered audio at least
+  once can be called dead. Zeros from the very first cycle are what a missing or
+  stale **System Audio Recording** grant looks like, and that is not a tap that
+  died. `callAudio` stays `unknown` until real audio arrives.
+- **A tap stream hark cannot read.** The check reinterprets the stream as 32-bit
+  float, so any other layout is recognised and left unmonitored. Recording is
+  unaffected, and `callAudio` is omitted entirely for that capture rather than
+  serving a verdict nothing measured.
+
 The remote-control agent reports this as `callAudio` in `GET /status`.
 
 Stopping is also bounded: if the audio stream can't be torn down (most often a
