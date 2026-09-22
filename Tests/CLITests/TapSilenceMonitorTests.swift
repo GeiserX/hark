@@ -304,6 +304,8 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     private var probes = 0
     private var probeAnswer = TapProbeResult.silent
     private var restartSeconds = 0.0
+    private var stopSeconds = 0.0
+    private var stopDone = false
     private var restarting = false
     private var restartBegan: Date?
     private(set) var stoppedDuringRestart = false
@@ -315,7 +317,12 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
         lock.lock(); self.onAudio = onAudio; lock.unlock()
     }
     func stop() {
-        lock.lock(); if restarting { stoppedDuringRestart = true }; lock.unlock()
+        lock.lock()
+        if restarting { stoppedDuringRestart = true }
+        let hold = stopSeconds
+        lock.unlock()
+        if hold > 0 { Thread.sleep(forTimeInterval: hold) }
+        lock.lock(); stopDone = true; lock.unlock()
     }
     func restart() -> Bool {
         lock.lock()
@@ -333,6 +340,10 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     /// of the hold was still to run when the stop landed.
     var restartBeganAt: Date? { lock.lock(); defer { lock.unlock() }; return restartBegan }
     func setRestartSeconds(_ value: Double) { lock.lock(); restartSeconds = value; lock.unlock() }
+    func setStopSeconds(_ value: Double) { lock.lock(); stopSeconds = value; lock.unlock() }
+    /// True once `stop()` ran to completion — false if the teardown budget ran
+    /// out while it was still working.
+    var stopFinished: Bool { lock.lock(); defer { lock.unlock() }; return stopDone }
     func probeTap(maxSeconds: Double) -> TapProbeResult {
         lock.lock(); defer { lock.unlock() }
         probes += 1
@@ -532,6 +543,30 @@ struct DeadTapRecoveryTests {
         #expect(holdLeft > 1)  // the rebuild really was still running
         #expect(waited >= holdLeft - 0.2)
         #expect(!session.stoppedDuringRestart)
+    }
+
+    /// The stop has a teardown budget of its own. A rebuild still running when
+    /// the stop lands is drained under its own bound first, so a slow stop is
+    /// not cut short by however long the rebuild took — which would also print
+    /// the missing-grant advice for a cause that has nothing to do with TCC.
+    @Test func aSlowRebuildDoesNotEatTheStopsTeardownBudget() {
+        let control = CaptureControl()
+        let session = TapStubSession()
+        session.setProbeResult(.heardAudio)
+        session.setRestartSeconds(3.0)
+        session.setStopSeconds(3.5)  // 3 + 3.5 is over the 5 s teardown budget
+        let finished = start(session, control, stallSeconds: 60)
+
+        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
+        let deadline = Date().addingTimeInterval(15)
+        while !session.isRestarting, Date() < deadline {
+            session.cycle(tapSilent: true)
+            usleep(20_000)
+        }
+        #expect(session.isRestarting)
+        control.stop()
+        #expect(finished.wait(timeout: .now() + 20) == .success)
+        #expect(session.stopFinished)
     }
 
     /// Zeros on the tap and the probe hears nothing either: a quiet room. The

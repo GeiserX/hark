@@ -360,13 +360,12 @@ struct CaptureEngine {
         stopping.set(true)
         // Cancelling the timer doesn't wait for a handler that is mid-rebuild,
         // and a `restart()` still running when `stop()` returns would leave a
-        // live tap behind. The queue is drained inside the same bounded stop.
-        if !Self.runBounded(
-            teardownTimeout, label: "stopping the audio stream",
-            {
-                watchdogQueue.sync {}
-                session.stop()
-            })
+        // live tap behind — so drain the watchdog queue first. It gets its own
+        // bound: sharing the stop's would let a slow rebuild eat the teardown
+        // window and blame the timeout on a missing grant.
+        _ = Self.runBounded(
+            teardownTimeout, label: "finishing a tap rebuild", { watchdogQueue.sync {} })
+        if !Self.runBounded(teardownTimeout, label: "stopping the audio stream", { session.stop() })
         {
             Log.error("""
                 the audio stream did not stop within \
