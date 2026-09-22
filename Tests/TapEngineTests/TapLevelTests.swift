@@ -39,3 +39,29 @@ struct TapLevelTests {
         #expect(!isSilent(samples))
     }
 }
+
+@Suite("TapLevel.isFloat32")
+struct TapFormatTests {
+    private func asbd(
+        formatID: AudioFormatID = kAudioFormatLinearPCM,
+        flags: AudioFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+        bits: UInt32 = 32
+    ) -> AudioStreamBasicDescription {
+        AudioStreamBasicDescription(
+            mSampleRate: 48000, mFormatID: formatID, mFormatFlags: flags,
+            mBytesPerPacket: 8, mFramesPerPacket: 1, mBytesPerFrame: 8,
+            mChannelsPerFrame: 2, mBitsPerChannel: bits, mReserved: 0)
+    }
+
+    /// `isSilent` reinterprets the buffer as float32, so every other layout has
+    /// to be recognised and left unmonitored rather than misjudged.
+    @Test func onlyFloat32LinearPCMQualifies() {
+        #expect(TapLevel.isFloat32(asbd()))
+        #expect(
+            !TapLevel.isFloat32(
+                asbd(flags: kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked)))
+        #expect(!TapLevel.isFloat32(asbd(bits: 16)))
+        #expect(!TapLevel.isFloat32(asbd(bits: 64)))  // float64
+        #expect(!TapLevel.isFloat32(asbd(formatID: kAudioFormatAppleLossless)))
+    }
+}

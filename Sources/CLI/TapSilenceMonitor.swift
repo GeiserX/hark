@@ -17,6 +17,9 @@ import Foundation
 ///   * `tick()` on a fixed cadence; act on the returned `Action`.
 ///   * `probeFinished(heardAudio:)` when a probe asked for by `tick()` ends.
 ///
+/// The monitor only judges a tap that has been heard at least once: zeros from
+/// the first cycle are the missing-permission case, not a tap that died.
+///
 /// Probes run when the zero run reaches `silenceSeconds`, then 3x, 6x, and
 /// every further 6x of it (10 s, 30 s, 60 s, then each minute). Restarts ride
 /// the same schedule, so a restart that does not bring audio back is retried
@@ -26,6 +29,12 @@ import Foundation
 /// which is the stall watchdog's case, and this monitor stands aside.
 final class TapSilenceMonitor: @unchecked Sendable {
     enum State: String, Sendable {
+        /// Nothing has been measured: no verdict either way. Either the tap has
+        /// never delivered a single non-zero sample (the missing-grant case), or
+        /// the run of zeros was long enough to question but the throwaway tap
+        /// could not be built to answer it. Distinct from `silent`, which is a
+        /// measured quiet room, and from `ok`, which is measured audio.
+        case unknown
         /// Audio is flowing, or the zero run is still too short to question.
         case ok
         /// Zeros, and the last probe heard nothing either: a quiet room.
@@ -61,12 +70,22 @@ final class TapSilenceMonitor: @unchecked Sendable {
     private let now: () -> Date
     private let lock = NSLock()
 
-    private var state = State.ok
+    /// A tap that has never delivered audio is never judged: with no (or a
+    /// stale) "System Audio Recording" grant the tap stream is zeros from the
+    /// first cycle while the mic keeps them coming, and that is not a tap that
+    /// *died* — probing it would tear a tap down every minute on the one path
+    /// where that teardown has been seen to block. Same gate, same reason, as
+    /// `StallWatchdog.sawAudio`.
+    private var sawAudio = false
+    /// `unknown` until a non-silent cycle arrives: before that nothing has been
+    /// measured, and a tap that stays silent from its first cycle to its last
+    /// (the missing-grant case) would otherwise report `ok` for the whole
+    /// recording, which is the one answer a client must not be given when it is
+    /// asking whether system audio is being captured at all.
+    private var state = State.unknown
     private var restarts = 0
     private var runStartedAt: Date?
     private var lastSilentCycleAt: Date?
-    /// A zero run with no cycle for this long is a stalled stream, not a silent one.
-    private var staleSeconds: Double { min(2, silenceSeconds) }
     /// Bumped whenever a zero run ends, so a probe that outlives its run is ignored.
     private var runID = 0
     private var probesDone = 0
@@ -75,6 +94,9 @@ final class TapSilenceMonitor: @unchecked Sendable {
     private var confirmAt: Date?
     private var announcedGiveUp = false
     private var paused = false
+
+    /// A zero run with no cycle for this long is a stalled stream, not a silent one.
+    private var staleSeconds: Double { min(2, silenceSeconds) }
 
     init(
         silenceSeconds: Double = 10,
@@ -103,11 +125,16 @@ final class TapSilenceMonitor: @unchecked Sendable {
         defer { lock.unlock() }
         guard !paused else { return }
         if silent {
+            guard sawAudio else { return }
             let t = now()
             if runStartedAt == nil { runStartedAt = t }
             lastSilentCycleAt = t
             return
         }
+        sawAudio = true
+        // The first audio is what turns "nothing measured" into a verdict, and
+        // it arrives outside any zero run, so this cannot wait for `endRun`.
+        if state == .unknown { state = .ok }
         guard runStartedAt != nil else { return }
         if restartsThisRun > 0 {
             state = .recovered
@@ -129,9 +156,11 @@ final class TapSilenceMonitor: @unchecked Sendable {
     }
 
     /// Ends a run that no audio ended (pause, stalled stream). Its `silent` or
-    /// `dead` verdict goes with it; `recovered` is history and stays.
+    /// `dead` verdict goes with it; `recovered` is history and stays, and so is
+    /// `unknown`, which is the absence of a verdict rather than one: dropping to
+    /// `ok` would claim audio nothing has measured.
     private func abandonRun() {
-        if state != .recovered { state = .ok }
+        if state != .recovered, state != .unknown { state = .ok }
         endRun()
     }
 
@@ -184,6 +213,21 @@ final class TapSilenceMonitor: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if lastSilentCycleAt != nil { lastSilentCycleAt = now() }
+    }
+
+    /// A probe asked for by `tick()` could not be built, so it says nothing
+    /// about the live tap. The zero run keeps ageing and the probe still counts
+    /// against the schedule, so a scope that can never be probed is retried at
+    /// the same widening interval rather than every tick. No rebuild follows: a
+    /// tap is only ever rebuilt on a probe that *heard* audio.
+    func probeCouldNotRun() {
+        lock.lock()
+        defer { lock.unlock() }
+        let probedRun = probingRunID
+        probingRunID = nil
+        guard probedRun == runID, runStartedAt != nil else { return }
+        probesDone += 1
+        state = .unknown
     }
 
     func probeFinished(heardAudio: Bool) {

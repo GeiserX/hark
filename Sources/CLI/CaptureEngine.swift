@@ -164,7 +164,6 @@ struct CaptureEngine {
             else { return nil }
             let monitor = TapSilenceMonitor(silenceSeconds: recovery.tapSilenceSeconds)
             tapSession.onTapActivity = { monitor.observe(silent: $0) }
-            control?.setCallAudioSource { monitor.status() }
             return monitor
         }()
         let probeQueue = DispatchQueue(label: "hark.capture.tapprobe")
@@ -267,6 +266,16 @@ struct CaptureEngine {
             throw mapped(error)
         }
         Log.verbose("recording started")
+        // Only now is the tap stream's real format known, and with it whether the
+        // tap is monitored at all (a stream that isn't 32-bit float isn't). The
+        // callback had to be installed before `start`; advertising `callAudio`
+        // waits until here, so a session that reports nothing doesn't serve a
+        // permanently "ok" verdict it never measured.
+        if let tapMonitor, let tapSession = session as? TapHealthCaptureSession,
+            tapSession.reportsTapActivity
+        {
+            control?.setCallAudioSource { tapMonitor.status() }
+        }
         // Everything above had to happen before a single sample could be written,
         // and on the remote-control path a client is waiting to be told it may talk.
         control?.markCapturing()
@@ -287,6 +296,9 @@ struct CaptureEngine {
             let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
             timer.schedule(deadline: .now() + 1, repeating: 1)
             timer.setEventHandler {
+                // Teardown has begun: neither a rebuild nor a tap check may
+                // start now, the same guard the chunk paths above use.
+                if stopping.get() == true { return }
                 let paused = control?.isPaused == true
                 watchdog.setPaused(paused)
                 var stallRestarted = false
@@ -316,17 +328,27 @@ struct CaptureEngine {
                     break
                 case .probe:
                     probeQueue.async {
+                        if stopping.get() == true { return }
                         let result = tapSession.probeTap(maxSeconds: 3)
+                        let silentFor = Int(tapMonitor.status().silentFor)
                         // A probe that can't be built says nothing about the live
-                        // tap: say so once, and treat it as quiet (no rebuild).
-                        if case .failed(let reason) = result, probeFailureLogged.get() != true {
-                            probeFailureLogged.set(true)
-                            Log.notice(
-                                "could not check the system audio tap (\(reason)); "
-                                    + "a dead tap would go unnoticed")
+                        // tap, so it is not a quiet room either: report it once
+                        // and leave the state saying nothing was measured.
+                        if case .failed(let reason) = result {
+                            if probeFailureLogged.get() != true {
+                                probeFailureLogged.set(true)
+                                Log.notice(
+                                    "could not check the system audio tap (\(reason)); "
+                                        + "a dead tap would go unnoticed")
+                            }
+                            Log.verbose(
+                                "tap check after \(silentFor) s of zeros: "
+                                    + "a fresh tap could not be built (\(reason))")
+                            tapMonitor.probeCouldNotRun()
+                            return
                         }
                         Log.verbose(
-                            "tap check after \(Int(tapMonitor.status().silentFor)) s of zeros: "
+                            "tap check after \(silentFor) s of zeros: "
                                 + "a fresh tap \(result == .heardAudio ? "hears audio" : "hears nothing")")
                         tapMonitor.probeFinished(heardAudio: result == .heardAudio)
                     }
@@ -365,23 +387,76 @@ struct CaptureEngine {
         stopping.set(true)
         // Cancelling the timer doesn't wait for a handler that is mid-rebuild,
         // and a `restart()` still running when `stop()` returns would leave a
-        // live tap behind. The queue is drained inside the same bounded stop.
-        if !Self.runBounded(
-            teardownTimeout, label: "stopping the audio stream",
+        // live tap behind — `stop()`, `restart()` and the HAL state they share
+        // (tap, aggregate ID, IOProc) have no lock between them, so overlapping
+        // them can also destroy the same IDs twice. So the drains and the stop
+        // run in that order inside one closure: `runBounded` abandons the
+        // *wait*, not the work, so the ordering holds even when the bound
+        // expires. Separate bounds per step would break it precisely in the
+        // slow-rebuild case they exist to serve.
+        //
+        // Which step was still running is tracked so the timeout blames the
+        // right thing: a slow rebuild or tap check is not a missing grant, and
+        // saying so sends people to the wrong page.
+        //
+        // Every step draws from one deadline. Sequential bounds of
+        // `teardownTimeout` each would let the teardown run to a multiple of the
+        // limit whose name promises to be it, and past the agent's
+        // `$HARK_STOP_TIMEOUT` (`RemoteSession.failIfUnfinished`), which then
+        // marks a capture that finalized perfectly well as wedged — and keeps
+        // that verdict even once the worker reports a clean finish.
+        let teardownDeadline = Date().addingTimeInterval(teardownTimeout)
+        // 0 keeps its documented meaning of waiting indefinitely. Otherwise the
+        // remainder is floored above zero: `runBounded` reads 0 as "no limit",
+        // and a queue that is already idle needs only a moment.
+        let teardownBudget = {
+            teardownTimeout > 0 ? max(0.25, teardownDeadline.timeIntervalSinceNow) : 0
+        }
+        let rebuildDrained = LockBox<Bool>()
+        let checkDrained = LockBox<Bool>()
+        let stopped = Self.runBounded(
+            teardownBudget(), label: "stopping the audio stream",
             {
                 watchdogQueue.sync {}
+                rebuildDrained.set(true)
+                // A tap check in flight holds a throwaway tap on the same
+                // scope; the agent may be configuring the next capture as soon
+                // as this run returns.
+                probeQueue.sync {}
+                checkDrained.set(true)
                 session.stop()
             })
-        {
-            Log.error("""
-                the audio stream did not stop within \
-                \(ConfigKey.formatNumber(teardownTimeout))s; finalizing the recording anyway. \
-                This usually means the capture never had a working "System Audio Recording" \
-                grant (see docs/permissions.md).
-                """)
+        if !stopped {
+            let budget = ConfigKey.formatNumber(teardownTimeout)
+            if rebuildDrained.get() != true {
+                Log.error("""
+                    the tap rebuild still running did not finish within \(budget)s; \
+                    finalizing the recording anyway. The rebuilt tap is torn down when \
+                    this process exits, so a recording started before then may capture \
+                    no system audio.
+                    """)
+            } else if checkDrained.get() != true {
+                Log.error("""
+                    the tap check still running did not finish within \(budget)s; \
+                    finalizing the recording anyway. The throwaway tap it opened is torn \
+                    down when this process exits, so a recording started before then may \
+                    capture no system audio.
+                    """)
+            } else {
+                Log.error("""
+                    the audio stream did not stop within \(budget)s; finalizing the \
+                    recording anyway. This usually means the capture never had a working \
+                    "System Audio Recording" grant (see docs/permissions.md).
+                    """)
+            }
         }
-        _ = Self.runBounded(teardownTimeout, label: "draining pending writes", { ioQueue.sync {} })
+        _ = Self.runBounded(teardownBudget(), label: "draining pending writes", { ioQueue.sync {} })
         for sink in sinks + sourceSinks.map(\.1) {
+            // A sink whose finalize can block draws from the same budget as
+            // everything above rather than carrying a bound of its own length:
+            // two bounds of the same length add up past `$HARK_STOP_TIMEOUT`,
+            // which is what has the agent call a clean capture wedged.
+            (sink as? DeadlineBoundedSink)?.setFinalizeTimeout(teardownBudget())
             do {
                 try sink.finalize()
             } catch {

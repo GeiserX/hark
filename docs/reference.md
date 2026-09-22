@@ -122,24 +122,50 @@ nobody talks is exact digital silence), so hark never restarts on silence.
 After 10 s of zeros (`$HARK_TAP_SILENCE_SECONDS`) it opens a second, throwaway
 tap for up to 3 s. If that tap hears audio while the recording still gets
 zeros, the recording's tap is rebuilt and the same file continues, with one
-line on stderr naming the output device and formats. If it hears nothing
+line on stderr naming the output device and formats. A rebuild delivers no
+samples while it runs, so the recording carries a gap of its length and
+everything after it sits that much earlier against the wall clock — the same
+as the restart above. If it hears nothing
 either, nothing happens, and it looks again at 30 s, 60 s, and then every
 minute until audio returns. At most five rebuilds are tried per silent stretch.
-A paused recording is never checked or rebuilt, and a check that cannot be set up
-is reported once on stderr and counts as hearing nothing.
+A paused recording is never checked or rebuilt. A check that cannot be set up is
+reported once on stderr and measures nothing, so it never rebuilds the tap and
+is not read as a quiet room either; `callAudio` says `unknown` for it.
+
+Two cases are deliberately left alone rather than judged, because in both of
+them the check has measured nothing and a rebuild would only tear a tap down
+and build it again for the whole recording:
+
+- **A tap that has never been heard.** Only a tap that delivered audio at least
+  once can be called dead. Zeros from the very first cycle are what a missing or
+  stale **System Audio Recording** grant looks like, and that is not a tap that
+  died. `callAudio` stays `unknown` until real audio arrives.
+- **A tap stream hark cannot read.** The check reinterprets the stream as 32-bit
+  float, so any other layout is recognised and left unmonitored. Recording is
+  unaffected, and `callAudio` is omitted entirely for that capture rather than
+  serving a verdict nothing measured.
+
 The remote-control agent reports this as `callAudio` in `GET /status`.
 
 Stopping is also bounded: if the audio stream can't be torn down (most often a
 missing or stale **System Audio Recording** grant, which has been seen to block
 the Core Audio teardown indefinitely), hark reports it and finalizes the
 recording anyway so the audio captured so far stays playable — after
-`$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely). The same
-budget bounds how long a `--live-streaming` run waits at stop for its decoder to
-catch up, so a decoder that has fallen behind costs the last words of the
-transcript rather than the stop. Those words are dropped, not delivered late: once
-the budget expires hark stops that sink writing, so the transcript is complete and
-final the moment stop returns and a client reading it on the finished signal never
-sees it grow.
+`$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely).
+That is one budget for the whole teardown, not one per step. A tap rebuild or
+tap check still running is waited for first, in that order, then stopping the
+stream, then draining pending writes, then finalizing each output, each taking
+whatever is left. So a stop never overtakes a rebuild, and the teardown as a
+whole cannot overrun `$HARK_STOP_TIMEOUT` and have the agent call a finished
+capture wedged. The message names whichever step ran out of time, since a slow
+rebuild is not a permission problem.
+
+For a `--live-streaming` run the finalize step is how long the stop waits for the
+decoder to catch up, so a decoder that has fallen behind costs the last words of
+the transcript rather than the stop. Those words are dropped, not delivered late:
+once the budget expires hark stops that sink writing, so the transcript is
+complete and final the moment stop returns and a client reading it on the
+finished signal never sees it grow.
 
 Starting has its own bound. The remote-control agent's
 [`POST /start`](remote-control.md) answers once the capture is open — with

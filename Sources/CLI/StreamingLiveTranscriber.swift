@@ -9,6 +9,21 @@ protocol LiveTranscriptionSink: AudioSink {
     func rethrowErrors() throws
 }
 
+/// A sink whose `finalize()` can block for a while, and which will honour a
+/// bound set by the capture's teardown budget.
+///
+/// `CaptureEngine.run` hands each of these whatever is left of the one teardown
+/// budget just before finalizing it. Without that they would each carry a bound
+/// of the same length as the stop's, and two bounds of the same length can add
+/// up past `$HARK_STOP_TIMEOUT`, which is what makes the agent call a capture
+/// that finalized cleanly wedged. Sinks whose `finalize()` cannot block do not
+/// conform and are left alone.
+protocol DeadlineBoundedSink: AnyObject {
+    /// Seconds `finalize()` may spend; 0 means wait indefinitely, as everywhere
+    /// else in the teardown.
+    func setFinalizeTimeout(_ seconds: TimeInterval)
+}
+
 extension LiveTranscriber: LiveTranscriptionSink {}
 
 /// Continuous live transcription (`--live-streaming`): instead of waiting for a
@@ -28,7 +43,9 @@ extension LiveTranscriber: LiveTranscriptionSink {}
 /// decode path. One resampler serves the whole call, so the recognizer's sample
 /// clock and hark's capture clock are the same quantity (`CaptureEngine` drops
 /// paused chunks before any sink, so both exclude paused time).
-final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable {
+final class StreamingLiveTranscriber: LiveTranscriptionSink, DeadlineBoundedSink,
+    @unchecked Sendable
+{
     private let recognizer: any StreamingRecognizer
     private let writer: LiveTranscriptWriter
     private let ownsWriter: Bool
@@ -41,9 +58,13 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
     private let screen: FileHandle
     private let transcriptLog: TranscriptLog?
     /// How long `finalize()` waits for the decoder to drain before giving the
-    /// recording back (0 = wait indefinitely). Same budget as the rest of
-    /// `CaptureEngine`'s teardown.
-    private let finalizeTimeout: TimeInterval
+    /// recording back (0 = wait indefinitely). `CaptureEngine` overwrites this
+    /// with whatever is left of the teardown budget just before finalizing, so
+    /// the stop and this wait draw from one budget instead of two of the same
+    /// length. Read under `lock` because the setter and `finalize()` are on the
+    /// teardown thread while the consumer `Task` runs elsewhere.
+    private var finalizeTimeoutStorage: TimeInterval
+    private var finalizeTimeout: TimeInterval { lock.withLock { finalizeTimeoutStorage } }
 
     let label: String
 
@@ -108,7 +129,7 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         self.screenEcho = screenEcho
         self.screen = screen
         self.transcriptLog = transcriptLog
-        self.finalizeTimeout = finalizeTimeout
+        self.finalizeTimeoutStorage = finalizeTimeout
         self.label = labelName
         self.cutter = StreamingLineCutter(
             gapSeconds: gapSeconds, maxLineSeconds: maxLineSeconds)
@@ -164,6 +185,10 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         pendingBytes += data.count
         lock.unlock()
         continuation.yield(data)
+    }
+
+    func setFinalizeTimeout(_ seconds: TimeInterval) {
+        lock.withLock { finalizeTimeoutStorage = seconds }
     }
 
     func finalize() throws {
