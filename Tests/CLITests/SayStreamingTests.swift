@@ -193,9 +193,11 @@ struct SayStreamingTests {
             ])
         else { return }
 
-        let (models, first, second) = try await offCooperativePool {
+        // Two recognizers over one shared model set, as a --mix capture builds.
+        // Each holds its own manager, which holds the shared handles alive.
+        let (first, second) = try await offCooperativePool {
             let models = try NemotronStreamingModels.load(language: nil)
-            return (models, try models.makeRecognizer(), try models.makeRecognizer())
+            return (try models.makeRecognizer(), try models.makeRecognizer())
         }
         let pathA = FileManager.default.temporaryDirectory
             .appendingPathComponent("hark-say-stream-a-\(UUID().uuidString).json").path
