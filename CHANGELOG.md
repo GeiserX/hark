@@ -39,7 +39,10 @@ All notable changes to Hark are documented here. The format is loosely based on
   a start that fails on the way up returns its own error instead of a `201` for a
   recording that never happened. Both the start answer and `GET /status` carry
   `capturing`, and the wait gives up at 60 s and answers with `capturing: false`
-  rather than holding a client forever on a first-ever model download.
+  rather than holding a client forever on a first-ever model download. The HTTP
+  server's own ceiling on a handler is raised to clear that wait: at its default
+  15 s a cold start that answered at 22.8 s was cut off with a `500` while the
+  capture ran on.
 
 - A `--system --mix` recording no longer loses the system side silently. On a
   real 71-minute call the tap went to exact digital silence twice while the

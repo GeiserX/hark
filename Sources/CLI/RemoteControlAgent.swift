@@ -42,7 +42,11 @@ final class RemoteControlAgent: @unchecked Sendable {
                 """)
         }
 
-        let server = HTTPServer(address: try address.socketAddress())
+        // FlyingFox cuts a handler off at its `timeout` (15 s by default) and
+        // answers 500 in its place. `/start` legitimately takes longer than that
+        // while a cold recognizer model loads, so the ceiling must clear the
+        // wait, or the client is told the start failed while the capture runs on.
+        let server = HTTPServer(address: try address.socketAddress(), timeout: Self.requestTimeout)
 
         Log.notice(
             "hark remote-control agent on http://\(address.display) "
@@ -175,7 +179,7 @@ final class RemoteControlAgent: @unchecked Sendable {
         // "recording" while nothing was being captured, and everything said in
         // the meantime was gone. Wait for the capture to exist, and hand back the
         // run's own error instead of a 201 when it fails on the way up.
-        let capturing = control.waitUntilCapturing(timeout: Self.startWait)
+        let capturing = await control.waitUntilCapturing(timeout: Self.startWait)
         if !capturing, let error = outcome.error {
             throw error
         }
@@ -186,6 +190,10 @@ final class RemoteControlAgent: @unchecked Sendable {
     /// answers anyway with `capturing: false`. A first-ever model download can
     /// outlast any sensible wait, and the client can watch `GET /status` for it.
     static let startWait: TimeInterval = 60
+    /// What the HTTP server allows a handler before answering 500 for it. It has
+    /// to outlast `startWait` plus the work around it; measured: a cold
+    /// `--live-streaming` start answered at 22.8 s and the default 15 s cut it off.
+    static let requestTimeout: TimeInterval = startWait + 15
 
     private func statusResponse() throws -> HTTPResponse {
         Self.json(

@@ -208,7 +208,9 @@ comes once the capture is open, so a client that starts talking the moment it se
 the `201` is heard from its first word. A start that fails on the way up returns its own error
 instead of a `201` for a recording that never happened. The wait gives up after
 60 s and answers anyway with `capturing: false`, which a first-ever model download
-can reach; watch `capturing` in `GET /status` for it to turn true.
+can reach; watch `capturing` in `GET /status` for it to turn true. Give the request
+a client timeout past 60 s: the agent's HTTP server allows a handler 75 s, and a
+client that gives up sooner reports a failure for a capture that is running.
 
 **Existing files.** The agent can't ask, so it defaults to `ifExists: "unique"`:
 if `meeting.m4a` is already there, the session records `meeting-1.m4a` (and
