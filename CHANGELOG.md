@@ -56,7 +56,12 @@ All notable changes to Hark are documented here. The format is loosely based on
   zeros from its first buffer, which is a missing permission rather than a tap
   that died, and the all-zero warning already covers it. A tap stream that is
   not 32-bit float is not judged either. `GET /status` gains
-  `session.callAudio` = `{state: ok|silent|dead|recovered, silentFor, restarts}`.
+  `session.callAudio` =
+  `{state: unknown|ok|silent|dead|recovered, silentFor, restarts}`, where
+  `unknown` means nothing has been measured: the tap has not delivered audio
+  yet, or the throwaway tap could not be built to judge a run of zeros. It is
+  not `silent`, which is a measured quiet room. A tap stream hark cannot read
+  omits the field altogether.
   Why the tap dies is still unknown; the rebuild logs the output device, its
   sample rate and the tap format to help find out.
 - Diarized batch transcription (`hark -i FILE --speakers`, and the end-of-capture
