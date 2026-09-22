@@ -265,16 +265,12 @@ struct ChannelAttributionDispatchTests {
     }
 
     /// A quarter-second 440 Hz tone: enough to be a real audio file.
-    ///
-    /// The phase is a separate annotated `let` because the one-line form made
-    /// the type checker give up on the CI toolchain: untyped literals either
-    /// side of `.pi` leave it too many overloads to try. The samples are
-    /// bit-identical to the single-expression version.
     private func tone() -> [Float] {
-        (0..<4000).map { i -> Float in
-            let phase: Double = 2 * Double.pi * 440 * Double(i) / 16000
-            return Float(sin(phase)) * 0.5
-        }
+        // Spelled out with explicit types: as one expression the CI runner's
+        // compiler gives up type-checking it ("unable to type-check this
+        // expression in reasonable time") and the whole suite fails to build.
+        let step: Double = 2.0 * Double.pi * 440.0 / 16000.0
+        return (0..<4000).map { (i: Int) -> Float in Float(sin(Double(i) * step)) * 0.5 }
     }
 }
 
