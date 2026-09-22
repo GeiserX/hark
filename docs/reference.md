@@ -122,7 +122,10 @@ nobody talks is exact digital silence), so hark never restarts on silence.
 After 10 s of zeros (`$HARK_TAP_SILENCE_SECONDS`) it opens a second, throwaway
 tap for up to 3 s. If that tap hears audio while the recording still gets
 zeros, the recording's tap is rebuilt and the same file continues, with one
-line on stderr naming the output device and formats. If it hears nothing
+line on stderr naming the output device and formats. A rebuild delivers no
+samples while it runs, so the recording carries a gap of its length and
+everything after it sits that much earlier against the wall clock — the same
+as the restart above. If it hears nothing
 either, nothing happens, and it looks again at 30 s, 60 s, and then every
 minute until audio returns. At most five rebuilds are tried per silent stretch.
 A paused recording is never checked or rebuilt, and a check that cannot be set up

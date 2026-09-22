@@ -458,6 +458,27 @@ struct DeadTapRecoveryTests {
         #expect(finished.wait(timeout: .now() + 5) == .success)
     }
 
+    /// The plain paths are not monitored at all: a mic-only capture, and a
+    /// `--system` capture with no mic where the tap is its own clock (a tap that
+    /// dies there stops delivering, which is the stall watchdog's case). Both
+    /// report no tap activity, so there is no `callAudio` and no probe, whatever
+    /// the tap stream does.
+    @Test func aSessionThatReportsNoTapActivityIsNeverMonitored() {
+        let control = CaptureControl()
+        let session = TapStubSession(reportsTapActivity: false)
+        session.setProbeResult(.heardAudio)
+        let finished = start(session, control)
+
+        feed(session, tapSilent: false, seconds: 0.3)
+        feed(session, tapSilent: true, seconds: 4)
+        #expect(control.callAudio == nil)
+        #expect(session.probeCount == 0)
+        #expect(session.restartCount == 0)
+
+        control.stop()
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+    }
+
     /// A tap stream that turns out not to be 32-bit float can't be judged by
     /// `TapLevel`, and the session only knows that once `start` has built the
     /// aggregate. The capture runs, and `callAudio` is absent rather than
