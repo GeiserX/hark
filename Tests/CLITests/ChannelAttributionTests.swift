@@ -250,16 +250,48 @@ struct ChannelAttributionDispatchTests {
         }
     }
 
+    /// The mode resolves from the environment and the config file too, so a
+    /// `source` set once for live captures refuses every mono file from then on.
+    /// That is the breaking half of this change and it must not depend on the
+    /// flag being typed.
+    @Test func aConfiguredSourceModeRefusesAMonoFileToo() throws {
+        let work = try helpers.makeWorkDirectory()
+        defer { try? FileManager.default.removeItem(at: work) }
+        let mono = work.appendingPathComponent("mixed.wav")
+        try helpers.writeWav(channels: [tone()], to: mono)
+        let transcript = work.appendingPathComponent("out.txt").path
+
+        var config = Configuration()
+        config.speakerMode = "source"
+        for (environment, configuration) in [
+            (["HARK_SPEAKER_MODE": "source"], Configuration()),
+            ([:], config),
+        ] {
+            let error = thrownError {
+                try runBatch(
+                    [], input: mono, transcript: transcript,
+                    environment: environment, config: configuration)
+            }
+            let hark = try #require(error as? HarkError, "got \(String(describing: error))")
+            #expect(hark.code == .usage)
+            #expect(hark.message.contains("has 1 channel."))
+        }
+    }
+
     // MARK: Helpers
 
     /// Parses real CLI arguments and runs the `-i FILE --speakers` dispatch on
-    /// them, with the user's config and environment left out of it.
-    private func runBatch(_ arguments: [String], input: URL, transcript: String) throws {
+    /// them, with the user's config and environment left out of it unless the
+    /// caller supplies them.
+    private func runBatch(
+        _ arguments: [String], input: URL, transcript: String,
+        environment: [String: String] = [:], config: Configuration = Configuration()
+    ) throws {
         let hark = try Hark.parse(
             ["-i", input.path, "-t", transcript, "--speakers", "--model", missingModel]
                 + arguments)
         let settings = try ResolvedSettings.resolve(
-            from: hark, environment: [:], config: Configuration())
+            from: hark, environment: environment, config: config)
         try hark.runBatchDiarization(
             audioPath: input.path, to: .file(transcript), settings: settings)
     }
@@ -366,5 +398,41 @@ struct ChannelAttributionIntegrationTests {
 
     private func text(of cues: [TranscriptCue], speaker: String) -> String {
         cues.filter { $0.speaker == speaker }.map(\.text).joined(separator: " ").lowercased()
+    }
+}
+
+/// Two tracks of the same recording can put cues at the same instant — that is
+/// what overlapping speech is — and `sorted` is not stable, so the merge has to
+/// decide the order itself or the same file can produce two different
+/// transcripts.
+@Suite("Attributed cue merge order")
+struct CueMergeOrderTests {
+    private func cues(_ label: String, starts: [Double]) -> [TranscriptCue] {
+        starts.enumerated().map {
+            TranscriptCue(start: $1, end: $1 + 1, text: "\(label) \($0)", speaker: label)
+        }
+    }
+
+    /// Enough cues sharing one start to leave an unstable sort no room to get
+    /// away with it: the microphone's track comes first, in its own order.
+    @Test func cuesAtTheSameInstantFollowTheTrackOrder() {
+        let mic = cues("You", starts: Array(repeating: 4.0, count: 64))
+        let call = cues("Others", starts: Array(repeating: 4.0, count: 64))
+
+        let merged = BatchDiarization.merge([mic, call])
+
+        #expect(merged.map(\.text) == (mic + call).map(\.text))
+    }
+
+    /// The tiebreak must not disturb the ordering that matters: later audio
+    /// still comes later, whichever track it arrived on.
+    @Test func startTimeStillWins() {
+        let mic = cues("You", starts: [0, 2, 4])
+        let call = cues("Others", starts: [1, 3, 5])
+
+        let merged = BatchDiarization.merge([mic, call])
+
+        #expect(merged.map(\.start) == [0, 1, 2, 3, 4, 5])
+        #expect(merged.map(\.speaker) == ["You", "Others", "You", "Others", "You", "Others"])
     }
 }

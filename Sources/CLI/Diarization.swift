@@ -145,6 +145,23 @@ enum BatchDiarization {
         translate: Bool, maxSpeakers: Int?, threshold: Double?, relabel: String? = nil,
         channel: Int? = nil
     ) throws -> [TranscriptCue] {
+        let diarizer = try SpeakerDiarizer.makeOffline(maxSpeakers: maxSpeakers, threshold: threshold)
+        let backend = try TranscriptionEngine.makeBatch(
+            engineName: engineName, modelFlag: modelFlag, language: language, translate: translate)
+        defer { backend.shutdown() }
+        return try diarizeToCues(
+            audioPath: audioPath, diarizer: diarizer, backend: backend, language: language,
+            translate: translate, relabel: relabel, channel: channel)
+    }
+
+    /// One pass over one channel (or the whole file) with a diarizer and a
+    /// transcription backend the caller owns, so a caller that reads several
+    /// channels of the same file loads each model once rather than once per
+    /// channel.
+    private static func diarizeToCues(
+        audioPath: String, diarizer: SpeakerDiarizer, backend: TranscriptionBackend,
+        language: String?, translate: Bool, relabel: String?, channel: Int?
+    ) throws -> [TranscriptCue] {
         // Decode through the shared pipeline, as transcription does: FluidAudio's
         // converter folds channels with AVAudioConverter, which keeps channel 0,
         // so a speaker recorded only on the right channel would diarize as silence.
@@ -153,13 +170,8 @@ enum BatchDiarization {
         let samples = try AudioConverter().resampleAudioFile(mono)
         guard !samples.isEmpty else { return [] }
 
-        let diarizer = try SpeakerDiarizer.makeOffline(maxSpeakers: maxSpeakers, threshold: threshold)
         let segments = try diarizer.diarize(samples)
         Log.verbose("diarization: \(segments.count) speaker segment(s)")
-
-        let backend = try TranscriptionEngine.makeBatch(
-            engineName: engineName, modelFlag: modelFlag, language: language, translate: translate)
-        defer { backend.shutdown() }
 
         var cues: [TranscriptCue] = []
         for segment in segments {
@@ -192,11 +204,18 @@ enum BatchDiarization {
         translate: Bool, threshold: Double?, labels: SpeakerLabels
     ) throws -> [TranscriptCue] {
         try requireSourceChannels(AudioPipeline.channelCount(of: audioPath), path: audioPath)
+        // One diarizer and one backend for both channels: the two passes ask for
+        // the same single speaker at the same threshold and the same engine, so
+        // building them per channel loaded and tore down pyannote and the
+        // transcription model twice for one file.
+        let diarizer = try SpeakerDiarizer.makeOffline(maxSpeakers: 1, threshold: threshold)
+        let backend = try TranscriptionEngine.makeBatch(
+            engineName: engineName, modelFlag: modelFlag, language: language, translate: translate)
+        defer { backend.shutdown() }
         func cues(channel: Int, label: String) throws -> [TranscriptCue] {
             try diarizeToCues(
-                audioPath: audioPath, engineName: engineName, modelFlag: modelFlag,
-                language: language, translate: translate, maxSpeakers: 1, threshold: threshold,
-                relabel: label, channel: channel)
+                audioPath: audioPath, diarizer: diarizer, backend: backend, language: language,
+                translate: translate, relabel: label, channel: channel)
         }
         return merge([
             try cues(channel: 0, label: labels.you),
@@ -220,8 +239,22 @@ enum BatchDiarization {
     }
 
     /// Merges cue lists from multiple tracks into one time-ordered transcript.
+    ///
+    /// Two cues can share a start — overlapping speech on two tracks is the
+    /// case this exists for — and `sorted` is not stable, so equal starts have
+    /// to be broken by something or the same input can produce two different
+    /// transcripts. The track's position does it: on an attributed file that
+    /// puts the microphone before the call, and unlike the speaker name it does
+    /// not move when the labels change.
     static func merge(_ cueLists: [[TranscriptCue]]) -> [TranscriptCue] {
-        cueLists.flatMap { $0 }.sorted { $0.start < $1.start }
+        cueLists.enumerated()
+            .flatMap { track, cues in
+                cues.enumerated().map { (start: $1.start, track: track, index: $0, cue: $1) }
+            }
+            .sorted {
+                ($0.start, $0.track, $0.index) < ($1.start, $1.track, $1.index)
+            }
+            .map(\.cue)
     }
 
     /// Writes 16 kHz mono Float samples to a temporary 16-bit WAV.
