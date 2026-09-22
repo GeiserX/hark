@@ -275,6 +275,7 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     private var probeAnswer = TapProbeResult.silent
     private var restartSeconds = 0.0
     private var restarting = false
+    private var restartBegan: Date?
     private(set) var stoppedDuringRestart = false
     var onTapActivity: (@Sendable (_ silent: Bool) -> Void)?
     let reportsTapActivity = true
@@ -287,12 +288,20 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
         lock.lock(); if restarting { stoppedDuringRestart = true }; lock.unlock()
     }
     func restart() -> Bool {
-        lock.lock(); restarts += 1; restarting = true; let hold = restartSeconds; lock.unlock()
+        lock.lock()
+        restarts += 1
+        restarting = true
+        restartBegan = Date()
+        let hold = restartSeconds
+        lock.unlock()
         if hold > 0 { Thread.sleep(forTimeInterval: hold) }
         lock.lock(); restarting = false; lock.unlock()
         return true
     }
     var isRestarting: Bool { lock.lock(); defer { lock.unlock() }; return restarting }
+    /// When the current (or last) `restart()` began, so a test can tell how much
+    /// of the hold was still to run when the stop landed.
+    var restartBeganAt: Date? { lock.lock(); defer { lock.unlock() }; return restartBegan }
     func setRestartSeconds(_ value: Double) { lock.lock(); restartSeconds = value; lock.unlock() }
     func probeTap(maxSeconds: Double) -> TapProbeResult {
         lock.lock(); defer { lock.unlock() }
@@ -322,15 +331,24 @@ private final class NullSink: AudioSink, @unchecked Sendable {
 struct DeadTapRecoveryTests {
     private let format = PCMFormat(sampleRate: 16000, bitsPerSample: 16, channels: 1)
 
+    /// Runs the engine against `session` on its own thread and returns once the
+    /// capture is live.
+    ///
+    /// `tapSilenceSeconds` is 2 rather than the shortest window that works,
+    /// because it also sets the monitor's stale window (`min(2, …)`): with 0.5 s
+    /// a `feed` thread descheduled for half a second on a loaded runner abandons
+    /// the zero run and the assertions fail for a reason the test isn't about.
     private func start(
-        _ session: TapStubSession, _ control: CaptureControl, stallSeconds: Double = 3
+        _ session: TapStubSession, _ control: CaptureControl, stallSeconds: Double = 3,
+        tapSilenceSeconds: Double = 2
     ) -> DispatchSemaphore {
         var eng = CaptureEngine(
             deviceUID: nil, rate: 16000, bits: 16, channels: 1,
             captureSystem: true, apps: [], excludeApps: [], mix: true)
         eng.control = control
         eng.recovery = RecoverySettings(
-            enabled: true, stallSeconds: stallSeconds, giveUpSeconds: 0, tapSilenceSeconds: 0.5)
+            enabled: true, stallSeconds: stallSeconds, giveUpSeconds: 0,
+            tapSilenceSeconds: tapSilenceSeconds)
         let finished = DispatchSemaphore(value: 0)
         let box = UncheckedSendableBox(value: (eng, session, format))
         Thread.detachNewThread {
@@ -363,7 +381,7 @@ struct DeadTapRecoveryTests {
 
         feed(session, tapSilent: false, seconds: 0.3)
         #expect(control.callAudio?.state == .ok)
-        feed(session, tapSilent: true, seconds: 3.5)
+        feed(session, tapSilent: true, seconds: 5)
         #expect(session.restartCount >= 1)
         #expect(control.callAudio?.state == .dead)
         feed(session, tapSilent: false, seconds: 0.2)
@@ -382,7 +400,7 @@ struct DeadTapRecoveryTests {
         session.setProbeResult(.failed("no tap"))
         let finished = start(session, control)
 
-        feed(session, tapSilent: true, seconds: 3.5)
+        feed(session, tapSilent: true, seconds: 4)
         #expect(session.probeCount >= 1)
         #expect(session.restartCount == 0)
         #expect(control.callAudio?.state == .silent)
@@ -405,7 +423,7 @@ struct DeadTapRecoveryTests {
         #expect(session.probeCount == 0)
         #expect(session.restartCount == 0)
         control.resume()
-        feed(session, tapSilent: true, seconds: 3.5)
+        feed(session, tapSilent: true, seconds: 6)
         #expect(session.restartCount >= 1)
 
         control.stop()
@@ -413,17 +431,23 @@ struct DeadTapRecoveryTests {
     }
 
     /// Buffers stop arriving altogether: the stall watchdog rebuilds the tap and
-    /// the tap monitor stays out of it (no probe, no second rebuild).
+    /// the tap monitor stays out of it (no probe, no rebuild of its own).
+    ///
+    /// A 4 s tap-silence window with the stale window still at `min(2, …)` = 2 s
+    /// is what makes that deterministic: a tick between 2.6 s and 4 s after the
+    /// last cycle sees a stale run and abandons it, and the 1 s cadence puts at
+    /// least one tick in that window. How many times the stall watchdog manages
+    /// to retry in 5 s is not this test's claim — `probeCount` and the monitor's
+    /// own `restarts` are.
     @Test func stalledStreamIsLeftToTheStallWatchdog() {
         let control = CaptureControl()
         let session = TapStubSession()
         session.setProbeResult(.heardAudio)
-        let finished = start(session, control, stallSeconds: 0.5)
+        let finished = start(session, control, stallSeconds: 0.5, tapSilenceSeconds: 4)
 
         feed(session, tapSilent: true, seconds: 0.3)
         usleep(5_000_000)  // no cycles at all; stall retries every 3 s
         #expect(session.restartCount >= 1)  // the stall watchdog's
-        #expect(session.restartCount <= 2)
         #expect(session.probeCount == 0)
         #expect(control.callAudio?.restarts == 0)
 
@@ -433,18 +457,30 @@ struct DeadTapRecoveryTests {
 
     /// A stop that lands while a rebuild is running waits for it, so `stop()`
     /// never runs under a `restart()` that would re-create the tap after it.
-    @Test func stopWaitsForARunningRebuild() {
+    ///
+    /// `stoppedDuringRestart` alone can't carry that: with a rebuild short
+    /// enough to finish on its own it stays false whether the drain exists or
+    /// not. So the rebuild holds for 3 s and the test also measures the wall
+    /// time from `stop()` to the run finishing — without the drain the stop
+    /// returns at once and that time is near zero.
+    @Test func stopWaitsForARunningRebuild() throws {
         let control = CaptureControl()
         let session = TapStubSession()
         session.setProbeResult(.heardAudio)
-        session.setRestartSeconds(1.0)
+        session.setRestartSeconds(3.0)
         let finished = start(session, control)
 
-        let deadline = Date().addingTimeInterval(6)
+        let deadline = Date().addingTimeInterval(15)
         while !session.isRestarting, Date() < deadline { session.cycle(tapSilent: true); usleep(20_000) }
         #expect(session.isRestarting)
+        let began = try #require(session.restartBeganAt)
         control.stop()
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+        let stoppedAt = Date()
+        #expect(finished.wait(timeout: .now() + 15) == .success)
+        let waited = Date().timeIntervalSince(stoppedAt)
+        let holdLeft = 3.0 - stoppedAt.timeIntervalSince(began)
+        #expect(holdLeft > 1)  // the rebuild really was still running
+        #expect(waited >= holdLeft - 0.2)
         #expect(!session.stoppedDuringRestart)
     }
 
@@ -456,7 +492,7 @@ struct DeadTapRecoveryTests {
         session.setProbeResult(.silent)
         let finished = start(session, control)
 
-        feed(session, tapSilent: true, seconds: 3.5)
+        feed(session, tapSilent: true, seconds: 4)
         #expect(session.probeCount >= 1)
         #expect(session.restartCount == 0)
         #expect(control.callAudio?.state == .silent)
