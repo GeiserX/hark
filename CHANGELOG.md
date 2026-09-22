@@ -17,10 +17,13 @@ All notable changes to Hark are documented here. The format is loosely based on
   exactly as before. The open line is written nowhere; the remote-control agent
   serves it as `session.partial` on `GET /status`. Apple Silicon, with English,
   Spanish, French, Italian, Portuguese and German in one model (583 MB on first
-  use, pre-fetch with `hark models download fluidaudio:streaming-asr`). It cannot
-  translate, `--diarize-engine offline` ignores it, and pairing it with `-i FILE`
-  is a usage error. Off by default: where it cannot run, hark prints why and the
-  segmented path runs unchanged, so no recording depends on it.
+  use, pre-fetch with `hark models download fluidaudio:streaming-asr`). It picks
+  its own recognizer and does its own segmenting, so `-e/--engine`, `--vad`,
+  `--vad-threshold`, `--gain` and `--silence-threshold` do not apply; hark names
+  the ones you set. It cannot translate, `--diarize-engine offline` ignores it,
+  and pairing it with `-i FILE` is a usage error. Off by default: where it cannot
+  run, hark prints why and the segmented path runs unchanged, so no recording
+  depends on it.
 - Live segmentation timing is configurable: `--segment-pause` (seconds of
   silence that end a transcript segment, default `0.7`) and `--segment-window`
   (seconds of unbroken speech after which a segment is cut anyway, default
@@ -29,6 +32,14 @@ All notable changes to Hark are documented here. The format is loosely based on
   `POST /start`. They set how soon a line appears in a live transcript; both the
   VAD and the amplitude (`--no-vad`) paths honour them. The pause must be 0–5 s,
   the window 1–60 s and greater than the pause. Defaults are unchanged.
+### Changed
+- The minimum FluidAudio version is now 0.15.3, up from 0.12.4. The streaming
+  recognizer needs `StreamingNemotronMultilingualAsrManager`, which 0.12.4 does
+  not have. No shipped binary moves, because the resolved pin was already
+  0.15.3. What changes is the floor a downstream consumer resolves against, and
+  the dependency is not streaming-only: FluidAudio also supplies the Silero VAD,
+  both diarizers and the Parakeet engine.
+
 ### Fixed
 - `POST /start` said a recording had begun before it had. The session was
   registered, the answer went out, and only then were the sources started, so

@@ -133,7 +133,10 @@ Stopping is also bounded: if the audio stream can't be torn down (most often a
 missing or stale **System Audio Recording** grant, which has been seen to block
 the Core Audio teardown indefinitely), hark reports it and finalizes the
 recording anyway so the audio captured so far stays playable — after
-`$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely).
+`$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely). The same
+budget bounds how long a `--live-streaming` run waits at stop for its decoder to
+catch up, so a decoder that has fallen behind costs the last words of the
+transcript rather than the stop.
 
 ## Working directory
 
@@ -182,9 +185,15 @@ serves it as `session.partial` on [`GET /status`](remote-control.md).
 The recognizer decodes every chunk and cuts lines out of its own token stream, so
 the streaming path ignores `-e/--engine`, `--vad`, `--vad-threshold`, `--gain` and
 `--silence-threshold`. Only `--segment-pause` and `--segment-window` still shape
-the lines. hark names any of those settings you set deliberately, by flag,
-environment or config, when it starts streaming, so a configured
-`engine: parakeet` never turns into the streaming model unannounced.
+the lines. hark names the ones you set yourself, by flag, environment or config,
+when streaming starts. A configured `engine: parakeet` never turns into the
+streaming model unannounced.
+
+A pause (interactive space, or [`POST /pause`](remote-control.md)) drops the
+captured audio, so the decoder's clock does not advance across it. Words spoken
+after a resume join the line that was open before it. Timestamps stay right,
+because the audio file excludes the paused time too. Only the line break is
+missing.
 
 Off by default. Turn it on per run, or with `$HARK_LIVE_STREAMING` or the
 `live-streaming` config key. It needs Apple Silicon and covers English, Spanish,
