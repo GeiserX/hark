@@ -303,6 +303,8 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     private var restarts = 0
     private var probes = 0
     private var probeAnswer = TapProbeResult.silent
+    private var probeSeconds = 0.0
+    private var probing = false
     private var restartSeconds = 0.0
     private var stopSeconds = 0.0
     private var stopDone = false
@@ -345,14 +347,24 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     /// out while it was still working.
     var stopFinished: Bool { lock.lock(); defer { lock.unlock() }; return stopDone }
     func probeTap(maxSeconds: Double) -> TapProbeResult {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         probes += 1
-        return probeAnswer
+        probing = true
+        let hold = probeSeconds
+        let answer = probeAnswer
+        lock.unlock()
+        if hold > 0 { Thread.sleep(forTimeInterval: hold) }
+        lock.lock(); probing = false; lock.unlock()
+        return answer
     }
     var isReady: Bool { lock.lock(); defer { lock.unlock() }; return onAudio != nil }
     var restartCount: Int { lock.lock(); defer { lock.unlock() }; return restarts }
     var probeCount: Int { lock.lock(); defer { lock.unlock() }; return probes }
     func setProbeResult(_ value: TapProbeResult) { lock.lock(); probeAnswer = value; lock.unlock() }
+    func setProbeSeconds(_ value: Double) { lock.lock(); probeSeconds = value; lock.unlock() }
+    /// True while a `probeTap` call is in flight — a throwaway tap on the live
+    /// capture's scope.
+    var isProbing: Bool { lock.lock(); defer { lock.unlock() }; return probing }
     /// One IO cycle: the mic keeps the buffers coming either way.
     func cycle(tapSilent: Bool) {
         lock.lock(); let cb = onAudio; lock.unlock()
@@ -567,6 +579,28 @@ struct DeadTapRecoveryTests {
         control.stop()
         #expect(finished.wait(timeout: .now() + 20) == .success)
         #expect(session.stopFinished)
+    }
+
+    /// A tap check still running when the stop lands is waited for. That check
+    /// holds a second tap on the live capture's scope, and the agent may already
+    /// be configuring the next capture by the time the run returns.
+    @Test func stopWaitsForARunningTapCheck() {
+        let control = CaptureControl()
+        let session = TapStubSession()
+        session.setProbeResult(.silent)  // a quiet room: a check, never a rebuild
+        session.setProbeSeconds(2)
+        let finished = start(session, control, stallSeconds: 60)
+
+        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
+        let deadline = Date().addingTimeInterval(15)
+        while !session.isProbing, Date() < deadline {
+            session.cycle(tapSilent: true)
+            usleep(20_000)
+        }
+        #expect(session.isProbing)
+        control.stop()
+        #expect(finished.wait(timeout: .now() + 20) == .success)
+        #expect(!session.isProbing)
     }
 
     /// Zeros on the tap and the probe hears nothing either: a quiet room. The

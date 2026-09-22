@@ -282,6 +282,9 @@ struct CaptureEngine {
             let timer = DispatchSource.makeTimerSource(queue: watchdogQueue)
             timer.schedule(deadline: .now() + 1, repeating: 1)
             timer.setEventHandler {
+                // Teardown has begun: neither a rebuild nor a tap check may
+                // start now, the same guard the chunk paths above use.
+                if stopping.get() == true { return }
                 let paused = control?.isPaused == true
                 watchdog.setPaused(paused)
                 var stallRestarted = false
@@ -311,6 +314,7 @@ struct CaptureEngine {
                     break
                 case .probe:
                     probeQueue.async {
+                        if stopping.get() == true { return }
                         let result = tapSession.probeTap(maxSeconds: 3)
                         // A probe that can't be built says nothing about the live
                         // tap: say so once, and treat it as quiet (no rebuild).
@@ -365,6 +369,10 @@ struct CaptureEngine {
         // window and blame the timeout on a missing grant.
         _ = Self.runBounded(
             teardownTimeout, label: "finishing a tap rebuild", { watchdogQueue.sync {} })
+        // A tap check in flight holds a throwaway tap on the same scope; the
+        // agent may be configuring the next capture as soon as this run returns.
+        _ = Self.runBounded(
+            teardownTimeout, label: "finishing a tap check", { probeQueue.sync {} })
         if !Self.runBounded(teardownTimeout, label: "stopping the audio stream", { session.stop() })
         {
             Log.error("""
