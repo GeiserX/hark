@@ -125,6 +125,11 @@ time-ordered transcript — so people talking over each other both survive:
 hark -i call.wav --speakers --speaker-mode source -t call.srt
 ```
 
+Such a file comes from any recorder that keeps the two sides apart: a
+conferencing tool that exports the local and the remote side on their own
+channel, or a capture that wrote your microphone and the system audio to one
+channel each instead of summing them.
+
 A mono file carries no such split; `--speaker-mode source` on one is a usage
 error (exit 64) rather than unlabeled output. Use the default
 `--speaker-mode auto` to diarize a mixed recording into `Speaker 1/2…`; `auto`

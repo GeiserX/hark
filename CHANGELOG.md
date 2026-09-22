@@ -23,7 +23,11 @@ All notable changes to Hark are documented here. The format is loosely based on
 - `-i FILE --speakers --speaker-mode source` on a file that has no two channels
   to attribute (mono, or more than two) is now a usage error naming the channel
   count, instead of being ignored. It used to produce a `Speaker 1/2…`
-  transcript that looked labeled but told you nothing about who was who.
+  transcript that looked labeled but told you nothing about who was who. The
+  mode resolves from `$HARK_SPEAKER_MODE` and the `speaker-mode` config key as
+  well as the flag, so anyone who set `source` globally for live captures now
+  meets this error on every mono `-i FILE --speakers` run until they pass
+  `--speaker-mode auto` or drop the setting.
 
 ### Fixed
 - Reading a stereo file threw away the right channel. Everything that folds a
@@ -39,6 +43,14 @@ All notable changes to Hark are documented here. The format is loosely based on
   Intel, `--no-vad`, or the model failing to load — segments reach the engine
   in the capture format, which is stereo for system capture, through this same
   decode, so live transcription now hears both channels too.
+
+### Documentation
+- The README, `man/hark.1` and `docs/permissions.md` said that on Intel the
+  diarized modes fall back to `You`/`Others`. That was never true of a file:
+  `-i FILE --speakers` goes through the offline diarizer, which refuses to run
+  anywhere but Apple Silicon whatever the speaker mode, so the run was already
+  an error rather than a fallback. Each now says that the model-free guarantee
+  covers live source attribution only.
 
 ## [0.4.3] - 2026-09-17
 
