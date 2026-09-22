@@ -312,8 +312,18 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     private var restartBegan: Date?
     private(set) var stoppedDuringRestart = false
     var onTapActivity: (@Sendable (_ silent: Bool) -> Void)?
-    let reportsTapActivity = true
+    /// Mirrors `SystemCaptureSession`: whether the tap can be monitored at all
+    /// depends on the stream format, which is only read inside `start`, so the
+    /// answer may change there.
+    private let tapActivityBeforeStart: Bool
+    private let tapActivityAfterStart: Bool
+    var reportsTapActivity: Bool { isReady ? tapActivityAfterStart : tapActivityBeforeStart }
     let tapDiagnostics = "stub tap"
+
+    init(reportsTapActivity: Bool = true, afterStart: Bool? = nil) {
+        tapActivityBeforeStart = reportsTapActivity
+        tapActivityAfterStart = afterStart ?? reportsTapActivity
+    }
 
     func start(onAudio: @escaping @Sendable (Data) -> Void) throws {
         lock.lock(); self.onAudio = onAudio; lock.unlock()
@@ -365,11 +375,13 @@ private final class TapStubSession: TapHealthCaptureSession, @unchecked Sendable
     /// True while a `probeTap` call is in flight — a throwaway tap on the live
     /// capture's scope.
     var isProbing: Bool { lock.lock(); defer { lock.unlock() }; return probing }
-    /// One IO cycle: the mic keeps the buffers coming either way.
+    /// One IO cycle: the mic keeps the buffers coming either way. Tap silence is
+    /// reported only when this session reports tap activity at all, as the real
+    /// session's IO callback does.
     func cycle(tapSilent: Bool) {
         lock.lock(); let cb = onAudio; lock.unlock()
         cb?(Data(repeating: 1, count: 320))
-        onTapActivity?(tapSilent)
+        if reportsTapActivity { onTapActivity?(tapSilent) }
     }
 }
 
@@ -441,6 +453,26 @@ struct DeadTapRecoveryTests {
         #expect(control.callAudio?.state == .recovered)
         #expect(control.callAudio?.restarts == session.restartCount)
         #expect(finished.wait(timeout: .now() + 0.1) == .timedOut)  // still recording
+
+        control.stop()
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+    }
+
+    /// A tap stream that turns out not to be 32-bit float can't be judged by
+    /// `TapLevel`, and the session only knows that once `start` has built the
+    /// aggregate. The capture runs, and `callAudio` is absent rather than
+    /// reporting an "ok" nothing ever measured.
+    @Test func aTapStreamThatCannotBeJudgedIsNotAdvertised() {
+        let control = CaptureControl()
+        let session = TapStubSession(reportsTapActivity: true, afterStart: false)
+        session.setProbeResult(.heardAudio)
+        let finished = start(session, control)
+
+        feed(session, tapSilent: false, seconds: 0.3)
+        feed(session, tapSilent: true, seconds: 4)
+        #expect(control.callAudio == nil)
+        #expect(session.probeCount == 0)
+        #expect(session.restartCount == 0)
 
         control.stop()
         #expect(finished.wait(timeout: .now() + 5) == .success)

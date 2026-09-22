@@ -36,6 +36,17 @@ enum TapLevel {
     /// About -90 dBFS: below any real signal, above denormal noise.
     static let silencePeak: Float32 = 3.2e-5
 
+    /// True when `asbd` is the packed 32-bit float layout `isSilent` reads. A tap
+    /// stream in any other format would make the silence verdict meaningless in
+    /// both directions — a false "non-silent" leaves a dead tap unnoticed, a
+    /// false "silent" rebuilds a healthy tap and puts a real gap in the
+    /// recording — so such a stream is not monitored at all.
+    static func isFloat32(_ asbd: AudioStreamBasicDescription) -> Bool {
+        asbd.mFormatID == kAudioFormatLinearPCM
+            && asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+            && asbd.mBitsPerChannel == 32
+    }
+
     /// True when every float32 sample in `buffer` is below `silencePeak`.
     static func isSilent(_ buffer: AudioBuffer) -> Bool {
         guard let samples = buffer.mData?.assumingMemoryBound(to: Float32.self) else { return true }
@@ -52,6 +63,9 @@ enum TapProbe {
         let tap: ProcessTap
         do { tap = try ProcessTap(scope: scope) } catch { return .failed("\(error)") }
         defer { tap.destroy() }
+        guard TapLevel.isFloat32(tap.format) else {
+            return .failed("tap stream is not 32-bit float")
+        }
 
         let composition: [String: Any] = [
             kAudioAggregateDeviceNameKey: "hark-probe",
@@ -69,9 +83,9 @@ enum TapProbe {
         }
         defer { AudioHardwareDestroyAggregateDevice(aggregateID) }
 
+        // Signalling more than once is harmless: the surplus count dies with the
+        // semaphore when `listen` returns.
         let heard = DispatchSemaphore(value: 0)
-        let once = NSLock()
-        nonisolated(unsafe) var signalled = false
         var ioProcID: AudioDeviceIOProcID?
         status = AudioDeviceCreateIOProcIDWithBlock(
             &ioProcID, aggregateID, DispatchQueue(label: "hark.tap.probe")
@@ -79,11 +93,7 @@ enum TapProbe {
             let buffers = UnsafeMutableAudioBufferListPointer(
                 UnsafeMutablePointer(mutating: inInputData))
             guard let tapBuffer = buffers.last, !TapLevel.isSilent(tapBuffer) else { return }
-            once.lock()
-            let first = !signalled
-            signalled = true
-            once.unlock()
-            if first { heard.signal() }
+            heard.signal()
         }
         guard status == noErr, let ioProcID else {
             return .failed("\(TapEngineError.ioProcFailed(status))")

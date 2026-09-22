@@ -39,7 +39,13 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCap
     /// Reports, once per IO cycle, whether the tap stream was digitally silent
     /// (`TapHealthCaptureSession`). Only invoked when a mic clocks the aggregate.
     public var onTapActivity: (@Sendable (_ silent: Bool) -> Void)?
-    public var reportsTapActivity: Bool { micDeviceUID != nil }
+    /// False when the tap is its own clock (no mic), and false for a tap stream
+    /// that is not 32-bit float, which `TapLevel` cannot read. The format is only
+    /// known once `configure` has built the aggregate, so this answers true until
+    /// then: the owner installs its callback before `start` either way, and a
+    /// stream that turns out not to be float32 simply never reports a cycle.
+    public var reportsTapActivity: Bool { micDeviceUID != nil && tapStreamIsFloat32 }
+    private var tapStreamIsFloat32 = true
     /// Default output device as it was when the current tap was built.
     private var outputAtConfigure = ""
     /// Debug aid (`HARK_DEBUG_KILL_TAP_AFTER=<seconds>`): zero the first tap's
@@ -181,6 +187,7 @@ public final class SystemCaptureSession: MultiTrackCaptureSession, MicMutableCap
         }
 
         outputAtConfigure = TapProbe.defaultOutputDescription()
+        tapStreamIsFloat32 = TapLevel.isFloat32(liveASBD)
         let reportTapActivity = reportsTapActivity
         let killTapAt = killTapAfter.map { Date().addingTimeInterval($0) }
         killTapAfter = nil

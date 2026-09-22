@@ -159,7 +159,6 @@ struct CaptureEngine {
             else { return nil }
             let monitor = TapSilenceMonitor(silenceSeconds: recovery.tapSilenceSeconds)
             tapSession.onTapActivity = { monitor.observe(silent: $0) }
-            control?.setCallAudioSource { monitor.status() }
             return monitor
         }()
         let probeQueue = DispatchQueue(label: "hark.capture.tapprobe")
@@ -262,6 +261,16 @@ struct CaptureEngine {
             throw mapped(error)
         }
         Log.verbose("recording started")
+        // Only now is the tap stream's real format known, and with it whether the
+        // tap is monitored at all (a stream that isn't 32-bit float isn't). The
+        // callback had to be installed before `start`; advertising `callAudio`
+        // waits until here, so a session that reports nothing doesn't serve a
+        // permanently "ok" verdict it never measured.
+        if let tapMonitor, let tapSession = session as? TapHealthCaptureSession,
+            tapSession.reportsTapActivity
+        {
+            control?.setCallAudioSource { tapMonitor.status() }
+        }
         // Everything above had to happen before a single sample could be written,
         // and on the remote-control path a client is waiting to be told it may talk.
         control?.markCapturing()
