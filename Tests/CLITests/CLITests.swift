@@ -1,5 +1,6 @@
 import ArgumentParser
 import Encoders
+import FluidAudio
 import Foundation
 import Testing
 
@@ -1002,7 +1003,9 @@ struct OfflineDiarizerConfigTests {
     @Test func carriesClusteringAndSpeakerCap() {
         let defaults = DiarizationDefaults.offlineConfig(maxSpeakers: nil, threshold: nil)
         #expect(defaults.clusteringThreshold == Float(DiarizationDefaults.clusteringThreshold))
-        #expect(defaults.numClusters == -1)  // untouched: automatic
+        // hark's own behaviour, not FluidAudio's sentinel for automatic: with no
+        // --max-speakers we leave numClusters exactly as the vendor set it.
+        #expect(defaults.numClusters == DiarizerConfig().numClusters)
         let capped = DiarizationDefaults.offlineConfig(maxSpeakers: 3, threshold: 0.5)
         #expect(capped.clusteringThreshold == 0.5)
         #expect(capped.numClusters == 3)
