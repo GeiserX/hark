@@ -444,24 +444,26 @@ struct DeadTapRecoveryTests {
 
     /// Zeros on the tap while a fresh tap hears audio: the engine rebuilds the
     /// tap, keeps recording, and the control reports the episode.
-    @Test func zerosWithAudibleProbeRebuildTheTap() {
-        let control = CaptureControl()
-        let session = TapStubSession()
-        session.setProbeResult(.heardAudio)
-        let finished = start(session, control)
+    @Test func zerosWithAudibleProbeRebuildTheTap() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setProbeResult(.heardAudio)
+            let finished = start(session, control)
 
-        feed(session, tapSilent: false, seconds: 0.3)
-        #expect(control.callAudio?.state == .ok)
-        feed(session, tapSilent: true, seconds: 5)
-        #expect(session.restartCount >= 1)
-        #expect(control.callAudio?.state == .dead)
-        feed(session, tapSilent: false, seconds: 0.2)
-        #expect(control.callAudio?.state == .recovered)
-        #expect(control.callAudio?.restarts == session.restartCount)
-        #expect(finished.wait(timeout: .now() + 0.1) == .timedOut)  // still recording
+            feed(session, tapSilent: false, seconds: 0.3)
+            #expect(control.callAudio?.state == .ok)
+            feed(session, tapSilent: true, seconds: 5)
+            #expect(session.restartCount >= 1)
+            #expect(control.callAudio?.state == .dead)
+            feed(session, tapSilent: false, seconds: 0.2)
+            #expect(control.callAudio?.state == .recovered)
+            #expect(control.callAudio?.restarts == session.restartCount)
+            #expect(finished.wait(timeout: .now() + 0.1) == .timedOut)  // still recording
 
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 5) == .success)
+        }
     }
 
     /// The plain paths are not monitored at all: a mic-only capture, and a
@@ -469,99 +471,109 @@ struct DeadTapRecoveryTests {
     /// dies there stops delivering, which is the stall watchdog's case). Both
     /// report no tap activity, so there is no `callAudio` and no probe, whatever
     /// the tap stream does.
-    @Test func aSessionThatReportsNoTapActivityIsNeverMonitored() {
-        let control = CaptureControl()
-        let session = TapStubSession(reportsTapActivity: false)
-        session.setProbeResult(.heardAudio)
-        let finished = start(session, control)
+    @Test func aSessionThatReportsNoTapActivityIsNeverMonitored() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession(reportsTapActivity: false)
+            session.setProbeResult(.heardAudio)
+            let finished = start(session, control)
 
-        feed(session, tapSilent: false, seconds: 0.3)
-        feed(session, tapSilent: true, seconds: 4)
-        #expect(control.callAudio == nil)
-        #expect(session.probeCount == 0)
-        #expect(session.restartCount == 0)
+            feed(session, tapSilent: false, seconds: 0.3)
+            feed(session, tapSilent: true, seconds: 4)
+            #expect(control.callAudio == nil)
+            #expect(session.probeCount == 0)
+            #expect(session.restartCount == 0)
 
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 5) == .success)
+        }
     }
 
     /// A tap stream that turns out not to be 32-bit float can't be judged by
     /// `TapLevel`, and the session only knows that once `start` has built the
     /// aggregate. The capture runs, and `callAudio` is absent rather than
     /// reporting an "ok" nothing ever measured.
-    @Test func aTapStreamThatCannotBeJudgedIsNotAdvertised() {
-        let control = CaptureControl()
-        let session = TapStubSession(reportsTapActivity: true, afterStart: false)
-        session.setProbeResult(.heardAudio)
-        let finished = start(session, control)
+    @Test func aTapStreamThatCannotBeJudgedIsNotAdvertised() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession(reportsTapActivity: true, afterStart: false)
+            session.setProbeResult(.heardAudio)
+            let finished = start(session, control)
 
-        feed(session, tapSilent: false, seconds: 0.3)
-        feed(session, tapSilent: true, seconds: 4)
-        #expect(control.callAudio == nil)
-        #expect(session.probeCount == 0)
-        #expect(session.restartCount == 0)
+            feed(session, tapSilent: false, seconds: 0.3)
+            feed(session, tapSilent: true, seconds: 4)
+            #expect(control.callAudio == nil)
+            #expect(session.probeCount == 0)
+            #expect(session.restartCount == 0)
 
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 5) == .success)
+        }
     }
 
     /// The missing-grant case end to end: the tap is silent from its first cycle,
     /// so the engine never builds a probe tap for it, however long it runs.
-    @Test func aTapSilentFromTheFirstCycleIsNeverProbed() {
-        let control = CaptureControl()
-        let session = TapStubSession()
-        session.setProbeResult(.heardAudio)
-        let finished = start(session, control)
+    @Test func aTapSilentFromTheFirstCycleIsNeverProbed() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setProbeResult(.heardAudio)
+            let finished = start(session, control)
 
-        feed(session, tapSilent: true, seconds: 5)
-        #expect(session.probeCount == 0)
-        #expect(session.restartCount == 0)
-        // A client polling this to learn whether system audio is being captured
-        // must not be told `ok` by a tap that has never delivered a sample.
-        #expect(control.callAudio?.state == .unknown)
+            feed(session, tapSilent: true, seconds: 5)
+            #expect(session.probeCount == 0)
+            #expect(session.restartCount == 0)
+            // A client polling this to learn whether system audio is being captured
+            // must not be told `ok` by a tap that has never delivered a sample.
+            #expect(control.callAudio?.state == .unknown)
 
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 5) == .success)
+        }
     }
 
     /// A probe that can't be built is not evidence of anything: no rebuild.
-    @Test func failedProbeNeverRebuilds() {
-        let control = CaptureControl()
-        let session = TapStubSession()
-        session.setProbeResult(.failed("no tap"))
-        let finished = start(session, control)
+    @Test func failedProbeNeverRebuilds() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setProbeResult(.failed("no tap"))
+            let finished = start(session, control)
 
-        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
-        feed(session, tapSilent: true, seconds: 4)
-        #expect(session.probeCount >= 1)
-        #expect(session.restartCount == 0)
-        // Not `silent`: a probe that could not be built measured nothing, and
-        // `silent` on the wire means a measured quiet room.
-        #expect(control.callAudio?.state == .unknown)
+            feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
+            feed(session, tapSilent: true, seconds: 4)
+            #expect(session.probeCount >= 1)
+            #expect(session.restartCount == 0)
+            // Not `silent`: a probe that could not be built measured nothing, and
+            // `silent` on the wire means a measured quiet room.
+            #expect(control.callAudio?.state == .unknown)
 
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 5) == .success)
+        }
     }
 
     /// Paused: zeros with an audible probe would be a dead tap, but a paused
     /// recording is left alone. Resuming arms it again.
-    @Test func pausedRecordingIsNeitherProbedNorRebuilt() {
-        let control = CaptureControl()
-        let session = TapStubSession()
-        session.setProbeResult(.heardAudio)
-        let finished = start(session, control)
+    @Test func pausedRecordingIsNeitherProbedNorRebuilt() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setProbeResult(.heardAudio)
+            let finished = start(session, control)
 
-        feed(session, tapSilent: false, seconds: 0.2)
-        control.pause()
-        feed(session, tapSilent: true, seconds: 3.5)
-        #expect(session.probeCount == 0)
-        #expect(session.restartCount == 0)
-        control.resume()
-        feed(session, tapSilent: true, seconds: 6)
-        #expect(session.restartCount >= 1)
+            feed(session, tapSilent: false, seconds: 0.2)
+            control.pause()
+            feed(session, tapSilent: true, seconds: 3.5)
+            #expect(session.probeCount == 0)
+            #expect(session.restartCount == 0)
+            control.resume()
+            feed(session, tapSilent: true, seconds: 6)
+            #expect(session.restartCount >= 1)
 
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 5) == .success)
+        }
     }
 
     /// Buffers stop arriving altogether: the stall watchdog rebuilds the tap and
@@ -573,21 +585,23 @@ struct DeadTapRecoveryTests {
     /// least one tick in that window. How many times the stall watchdog manages
     /// to retry in 5 s is not this test's claim — `probeCount` and the monitor's
     /// own `restarts` are.
-    @Test func stalledStreamIsLeftToTheStallWatchdog() {
-        let control = CaptureControl()
-        let session = TapStubSession()
-        session.setProbeResult(.heardAudio)
-        let finished = start(session, control, stallSeconds: 0.5, tapSilenceSeconds: 4)
+    @Test func stalledStreamIsLeftToTheStallWatchdog() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setProbeResult(.heardAudio)
+            let finished = start(session, control, stallSeconds: 0.5, tapSilenceSeconds: 4)
 
-        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
-        feed(session, tapSilent: true, seconds: 0.3)
-        usleep(5_000_000)  // no cycles at all; stall retries every 3 s
-        #expect(session.restartCount >= 1)  // the stall watchdog's
-        #expect(session.probeCount == 0)
-        #expect(control.callAudio?.restarts == 0)
+            feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
+            feed(session, tapSilent: true, seconds: 0.3)
+            usleep(5_000_000)  // no cycles at all; stall retries every 3 s
+            #expect(session.restartCount >= 1)  // the stall watchdog's
+            #expect(session.probeCount == 0)
+            #expect(control.callAudio?.restarts == 0)
 
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 5) == .success)
+        }
     }
 
     /// A stop that lands while a rebuild is running waits for it, so `stop()`
@@ -598,31 +612,33 @@ struct DeadTapRecoveryTests {
     /// not. So the rebuild holds for 3 s and the test also measures the wall
     /// time from `stop()` to the run finishing — without the drain the stop
     /// returns at once and that time is near zero.
-    @Test func stopWaitsForARunningRebuild() throws {
-        let control = CaptureControl()
-        let session = TapStubSession()
-        session.setProbeResult(.heardAudio)
-        session.setRestartSeconds(3.0)
-        let finished = start(session, control)
+    @Test func stopWaitsForARunningRebuild() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setProbeResult(.heardAudio)
+            session.setRestartSeconds(3.0)
+            let finished = start(session, control)
 
-        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
-        let deadline = Date().addingTimeInterval(15)
-        while !session.isRestarting, Date() < deadline { session.cycle(tapSilent: true); usleep(20_000) }
-        #expect(session.isRestarting)
-        let began = try #require(session.restartBeganAt)
-        control.stop()
-        let stoppedAt = Date()
-        #expect(finished.wait(timeout: .now() + 15) == .success)
-        let waited = Date().timeIntervalSince(stoppedAt)
-        // Whatever was left of the hold when the stop landed is what the stop
-        // had to wait for. This is deliberately not asserted to be large: on a
-        // runner slow enough to put the stop near the end of the hold the claim
-        // simply gets weaker, which is better than the test failing for a
-        // reason it is not about. Without the drain `waited` is near zero while
-        // `holdLeft` is most of 3 s, which is what makes it fail.
-        let holdLeft = 3.0 - stoppedAt.timeIntervalSince(began)
-        #expect(waited >= holdLeft - 0.2)
-        #expect(!session.stoppedDuringRestart)
+            feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
+            let deadline = Date().addingTimeInterval(15)
+            while !session.isRestarting, Date() < deadline { session.cycle(tapSilent: true); usleep(20_000) }
+            #expect(session.isRestarting)
+            let began = try #require(session.restartBeganAt)
+            control.stop()
+            let stoppedAt = Date()
+            #expect(finished.wait(timeout: .now() + 15) == .success)
+            let waited = Date().timeIntervalSince(stoppedAt)
+            // Whatever was left of the hold when the stop landed is what the stop
+            // had to wait for. This is deliberately not asserted to be large: on a
+            // runner slow enough to put the stop near the end of the hold the claim
+            // simply gets weaker, which is better than the test failing for a
+            // reason it is not about. Without the drain `waited` is near zero while
+            // `holdLeft` is most of 3 s, which is what makes it fail.
+            let holdLeft = 3.0 - stoppedAt.timeIntervalSince(began)
+            #expect(waited >= holdLeft - 0.2)
+            #expect(!session.stoppedDuringRestart)
+        }
     }
 
     /// A rebuild that outlasts the entire teardown budget must still finish
@@ -640,66 +656,72 @@ struct DeadTapRecoveryTests {
     /// expires the run returns while the abandoned thread is still draining, so
     /// reading `stoppedDuringRestart` straight away would see false for the
     /// wrong reason.
-    @Test func aRebuildSlowerThanTheBudgetStillFinishesBeforeTheStop() {
-        let control = CaptureControl()
-        let session = TapStubSession()
-        session.setProbeResult(.heardAudio)
-        session.setRestartSeconds(3.0)  // three times the budget below
-        let finished = start(session, control, stallSeconds: 60, teardownTimeout: 1)
+    @Test func aRebuildSlowerThanTheBudgetStillFinishesBeforeTheStop() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setProbeResult(.heardAudio)
+            session.setRestartSeconds(3.0)  // three times the budget below
+            let finished = start(session, control, stallSeconds: 60, teardownTimeout: 1)
 
-        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
-        let deadline = Date().addingTimeInterval(15)
-        while !session.isRestarting, Date() < deadline {
-            session.cycle(tapSilent: true)
-            usleep(20_000)
+            feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
+            let deadline = Date().addingTimeInterval(15)
+            while !session.isRestarting, Date() < deadline {
+                session.cycle(tapSilent: true)
+                usleep(20_000)
+            }
+            #expect(session.isRestarting)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 25) == .success)
+            let stopDeadline = Date().addingTimeInterval(20)
+            while !session.stopFinished, Date() < stopDeadline { usleep(20_000) }
+            #expect(session.stopFinished)
+            #expect(!session.stoppedDuringRestart)
         }
-        #expect(session.isRestarting)
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 25) == .success)
-        let stopDeadline = Date().addingTimeInterval(20)
-        while !session.stopFinished, Date() < stopDeadline { usleep(20_000) }
-        #expect(session.stopFinished)
-        #expect(!session.stoppedDuringRestart)
     }
 
     /// A tap check still running when the stop lands is waited for. That check
     /// holds a second tap on the live capture's scope, and the agent may already
     /// be configuring the next capture by the time the run returns.
-    @Test func stopWaitsForARunningTapCheck() {
-        let control = CaptureControl()
-        let session = TapStubSession()
-        session.setProbeResult(.silent)  // a quiet room: a check, never a rebuild
-        session.setProbeSeconds(2)
-        let finished = start(session, control, stallSeconds: 60)
+    @Test func stopWaitsForARunningTapCheck() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setProbeResult(.silent)  // a quiet room: a check, never a rebuild
+            session.setProbeSeconds(2)
+            let finished = start(session, control, stallSeconds: 60)
 
-        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
-        let deadline = Date().addingTimeInterval(15)
-        while !session.isProbing, Date() < deadline {
-            session.cycle(tapSilent: true)
-            usleep(20_000)
+            feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
+            let deadline = Date().addingTimeInterval(15)
+            while !session.isProbing, Date() < deadline {
+                session.cycle(tapSilent: true)
+                usleep(20_000)
+            }
+            #expect(session.isProbing)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 20) == .success)
+            #expect(!session.isProbing)
         }
-        #expect(session.isProbing)
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 20) == .success)
-        #expect(!session.isProbing)
     }
 
     /// Zeros on the tap and the probe hears nothing either: a quiet room. The
     /// tap is probed but never rebuilt.
-    @Test func zerosWithQuietProbeLeaveTheTapAlone() {
-        let control = CaptureControl()
-        let session = TapStubSession()
-        session.setProbeResult(.silent)
-        let finished = start(session, control)
+    @Test func zerosWithQuietProbeLeaveTheTapAlone() async throws {
+        try await offCooperativePool {
+            let control = CaptureControl()
+            let session = TapStubSession()
+            session.setProbeResult(.silent)
+            let finished = start(session, control)
 
-        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
-        feed(session, tapSilent: true, seconds: 4)
-        #expect(session.probeCount >= 1)
-        #expect(session.restartCount == 0)
-        #expect(control.callAudio?.state == .silent)
+            feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
+            feed(session, tapSilent: true, seconds: 4)
+            #expect(session.probeCount >= 1)
+            #expect(session.restartCount == 0)
+            #expect(control.callAudio?.state == .silent)
 
-        control.stop()
-        #expect(finished.wait(timeout: .now() + 5) == .success)
+            control.stop()
+            #expect(finished.wait(timeout: .now() + 5) == .success)
+        }
     }
 }
 
