@@ -431,14 +431,22 @@ struct RemoteErrorMappingTests {
     }
 }
 
-@Suite("A slow start still gets its answer")
+@Suite("A slow start still gets its answer", .serialized)
 struct SlowStartAnswerTests {
     /// FlyingFox answers 500 for any handler that outlives the server's `timeout`,
-    /// and `/start` waits up to `startWait` for the capture to open. The server's
-    /// ceiling has to clear that wait, or a cold start is reported as failed
-    /// while the recording runs on (seen at 22.8 s against the default 15 s).
+    /// and `/start` waits up to `AgentTimeouts.startWait` for the capture to open.
+    /// The server's ceiling has to clear that wait, or a cold start is reported as
+    /// failed while the recording runs on (seen at 22.8 s against the default
+    /// 15 s) — including when `$HARK_START_TIMEOUT` moves the wait, which is the
+    /// case a fixed ceiling gets wrong.
     @Test func theRequestCeilingClearsTheStartWait() {
-        #expect(RemoteControlAgent.requestTimeout > RemoteControlAgent.startWait)
+        #expect(AgentTimeouts.startWait == 60)
+        #expect(RemoteControlAgent.requestTimeout > AgentTimeouts.startWait)
+
+        setenv("HARK_START_TIMEOUT", "300", 1)
+        defer { unsetenv("HARK_START_TIMEOUT") }
+        #expect(AgentTimeouts.startWait == 300)
+        #expect(RemoteControlAgent.requestTimeout > AgentTimeouts.startWait)
     }
 
     /// The mechanism itself, so the ceiling is never mistaken for a courtesy:

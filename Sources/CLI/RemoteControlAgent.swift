@@ -21,6 +21,12 @@ final class RemoteControlAgent: @unchecked Sendable {
     /// `run()` once the raw `[host:]port` value is parsed (a bare
     /// `--remote-control` arrives here as just the resolved port).
     private var displayAddress: String
+    /// What the HTTP server allows a handler before it answers `500` in its
+    /// place. It has to outlast the `/start` wait plus the work around it, or a
+    /// slow start is reported as failed while the capture runs on: measured, a
+    /// cold `--live-streaming` start answered at 22.8 s and the 15 s default
+    /// cut it off.
+    static var requestTimeout: TimeInterval { AgentTimeouts.startWait + 15 }
 
     init(defaults: Hark, address: String) {
         self.defaults = UncheckedSendableBox(value: defaults)
@@ -179,21 +185,12 @@ final class RemoteControlAgent: @unchecked Sendable {
         // "recording" while nothing was being captured, and everything said in
         // the meantime was gone. Wait for the capture to exist, and hand back the
         // run's own error instead of a 201 when it fails on the way up.
-        let capturing = await control.waitUntilCapturing(timeout: Self.startWait)
+        let capturing = await control.waitUntilCapturing(timeout: AgentTimeouts.startWait)
         if !capturing, let error = outcome.error {
             throw error
         }
         return Self.json(StartedResponse(snapshot: snap, capturing: capturing), .created)
     }
-
-    /// How long `POST /start` waits for the capture to be running before it
-    /// answers anyway with `capturing: false`. A first-ever model download can
-    /// outlast any sensible wait, and the client can watch `GET /status` for it.
-    static let startWait: TimeInterval = 60
-    /// What the HTTP server allows a handler before answering 500 for it. It has
-    /// to outlast `startWait` plus the work around it; measured: a cold
-    /// `--live-streaming` start answered at 22.8 s and the default 15 s cut it off.
-    static let requestTimeout: TimeInterval = startWait + 15
 
     private func statusResponse() throws -> HTTPResponse {
         Self.json(
