@@ -160,6 +160,15 @@ a stop never overtakes a rebuild, and a slow teardown cannot overrun
 message names whichever step ran out of time, since a slow rebuild is not a
 permission problem.
 
+Starting has its own bound. The remote-control agent's
+[`POST /start`](remote-control.md) answers once the capture is open — with
+`--live-streaming` a recognizer model that is not in memory yet can hold that for
+tens of seconds — or after `$HARK_START_TIMEOUT` seconds (default 60), whichever
+comes first. Both that answer and `GET /status` carry `capturing`: true once the
+sources are open, so anything said from then on is recorded. `state` says
+`recording` from the moment a start is accepted, which is earlier, so `capturing`
+is the one to trust.
+
 ## Working directory
 
 `-C, --directory PATH` resolves **relative** artifact paths (`-i`, `-a`, `-t`,

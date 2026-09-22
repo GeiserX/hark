@@ -430,3 +430,77 @@ struct RemoteErrorMappingTests {
         #expect(RemoteControlAgent.httpStatus(for: .software).code == 500)
     }
 }
+
+@Suite("A slow start still gets its answer", .serialized)
+struct SlowStartAnswerTests {
+    /// FlyingFox answers 500 for any handler that outlives the server's `timeout`,
+    /// and `/start` waits up to `AgentTimeouts.startWait` for the capture to open.
+    /// The server's ceiling has to clear that wait, or a cold start is reported as
+    /// failed while the recording runs on (seen at 22.8 s against the default
+    /// 15 s) — including when `$HARK_START_TIMEOUT` moves the wait, which is the
+    /// case a fixed ceiling gets wrong.
+    @Test func theRequestCeilingClearsTheStartWait() {
+        unsetenv("HARK_START_TIMEOUT")   // the default, whatever the shell exports
+        #expect(AgentTimeouts.startWait == 60)
+        #expect(RemoteControlAgent.requestTimeout > AgentTimeouts.startWait)
+
+        setenv("HARK_START_TIMEOUT", "300", 1)
+        defer { unsetenv("HARK_START_TIMEOUT") }
+        #expect(AgentTimeouts.startWait == 300)
+        #expect(RemoteControlAgent.requestTimeout > AgentTimeouts.startWait)
+    }
+
+    /// The mechanism itself, so the ceiling is never mistaken for a courtesy:
+    /// the same handler is cut off with a 500 under a short timeout and answers
+    /// under a long one.
+    @Test func aHandlerSlowerThanTheServerTimeoutIsCutOff() async throws {
+        #expect(try await answer(afterHandlerSeconds: 0.4, serverTimeout: 0.1) == 500)
+        #expect(try await answer(afterHandlerSeconds: 0.4, serverTimeout: 5) == 200)
+    }
+
+    private func answer(afterHandlerSeconds delay: Double, serverTimeout: TimeInterval) async throws -> Int {
+        let server = HTTPServer(port: 0, timeout: serverTimeout)
+        await server.appendRoute("GET /slow") { _ in
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            return HTTPResponse(statusCode: .ok)
+        }
+        let task = Task { try await server.run() }
+        defer { task.cancel() }
+        try await server.waitUntilListening()
+        let host: String, port: UInt16
+        switch await server.listeningAddress {
+        case .ip4(_, let p)?: (host, port) = ("127.0.0.1", p)
+        case .ip6(_, let p)?: (host, port) = ("[::1]", p)
+        default: throw HarkError.software("server is not listening on TCP")
+        }
+        let url = URL(string: "http://\(host):\(port)/slow")!
+        let (_, response) = try await URLSession.shared.data(from: url)
+        return (response as? HTTPURLResponse)?.statusCode ?? -1
+    }
+
+    /// The handler's wait must not park a cooperative thread; it polls the gate.
+    @Test func theAsyncWaitFollowsTheGate() async {
+        let control = CaptureControl()
+        #expect(await control.waitUntilCapturing(timeout: 0.15) == false)   // nothing happened
+        control.markCapturing()
+        #expect(await control.waitUntilCapturing(timeout: 1) == true)
+
+        let failed = CaptureControl()
+        failed.markRunEnded()
+        #expect(await failed.waitUntilCapturing(timeout: 1) == false)      // released early, not after 1 s
+    }
+
+    /// A `POST /stop` arriving while the start is still waiting has to end the
+    /// wait. The engine installs its stop handler only once the sources are up, so
+    /// the open runs to completion and the gate opens afterwards — leaving the
+    /// start to answer `201` with `capturing: true` after the client had already
+    /// been answered `200` for its stop.
+    @Test func aStopDuringTheWaitEndsIt() async {
+        let control = CaptureControl()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { control.stop() }
+
+        let started = Date()
+        #expect(await control.waitUntilCapturing(timeout: 5) == false)
+        #expect(Date().timeIntervalSince(started) < 2)   // ended on the stop, not on the timeout
+    }
+}
