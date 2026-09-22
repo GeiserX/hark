@@ -610,16 +610,26 @@ struct DeadTapRecoveryTests {
         #expect(!session.stoppedDuringRestart)
     }
 
-    /// The stop has a teardown budget of its own. A rebuild still running when
-    /// the stop lands is drained under its own bound first, so a slow stop is
-    /// not cut short by however long the rebuild took — which would also print
-    /// the missing-grant advice for a cause that has nothing to do with TCC.
-    @Test func aSlowRebuildDoesNotEatTheStopsTeardownBudget() {
+    /// A rebuild that outlasts the entire teardown budget must still finish
+    /// before `stop()` runs.
+    ///
+    /// `stop()` and `restart()` share the session's tap, aggregate ID and
+    /// IOProc with no lock between them, so overlapping them can destroy the
+    /// same IDs twice, or let `configure()` install a fresh live tap and a
+    /// running IOProc after the stop has already returned. Ordering therefore
+    /// must not depend on the budget being generous enough: `runBounded`
+    /// abandons the wait, not the work, so the drain and the stop belong in one
+    /// closure on one thread.
+    ///
+    /// The stop is inspected only once it has actually run. When the bound
+    /// expires the run returns while the abandoned thread is still draining, so
+    /// reading `stoppedDuringRestart` straight away would see false for the
+    /// wrong reason.
+    @Test func aRebuildSlowerThanTheBudgetStillFinishesBeforeTheStop() {
         let control = CaptureControl()
         let session = TapStubSession()
         session.setProbeResult(.heardAudio)
-        session.setRestartSeconds(3.0)
-        session.setStopSeconds(3.5)  // 3 + 3.5 is over the 5 s teardown budget
+        session.setRestartSeconds(7.0)  // past the whole 5 s teardown budget
         let finished = start(session, control, stallSeconds: 60)
 
         feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
@@ -630,8 +640,11 @@ struct DeadTapRecoveryTests {
         }
         #expect(session.isRestarting)
         control.stop()
-        #expect(finished.wait(timeout: .now() + 20) == .success)
+        #expect(finished.wait(timeout: .now() + 25) == .success)
+        let stopDeadline = Date().addingTimeInterval(20)
+        while !session.stopFinished, Date() < stopDeadline { usleep(20_000) }
         #expect(session.stopFinished)
+        #expect(!session.stoppedDuringRestart)
     }
 
     /// A tap check still running when the stop lands is waited for. That check

@@ -373,23 +373,54 @@ struct CaptureEngine {
         stopping.set(true)
         // Cancelling the timer doesn't wait for a handler that is mid-rebuild,
         // and a `restart()` still running when `stop()` returns would leave a
-        // live tap behind — so drain the watchdog queue first. It gets its own
-        // bound: sharing the stop's would let a slow rebuild eat the teardown
-        // window and blame the timeout on a missing grant.
-        _ = Self.runBounded(
-            teardownTimeout, label: "finishing a tap rebuild", { watchdogQueue.sync {} })
-        // A tap check in flight holds a throwaway tap on the same scope; the
-        // agent may be configuring the next capture as soon as this run returns.
-        _ = Self.runBounded(
-            teardownTimeout, label: "finishing a tap check", { probeQueue.sync {} })
-        if !Self.runBounded(teardownTimeout, label: "stopping the audio stream", { session.stop() })
-        {
-            Log.error("""
-                the audio stream did not stop within \
-                \(ConfigKey.formatNumber(teardownTimeout))s; finalizing the recording anyway. \
-                This usually means the capture never had a working "System Audio Recording" \
-                grant (see docs/permissions.md).
-                """)
+        // live tap behind — `stop()`, `restart()` and the HAL state they share
+        // (tap, aggregate ID, IOProc) have no lock between them, so overlapping
+        // them can also destroy the same IDs twice. So the drains and the stop
+        // run in that order inside one closure: `runBounded` abandons the
+        // *wait*, not the work, so the ordering holds even when the bound
+        // expires. Separate bounds per step would break it precisely in the
+        // slow-rebuild case they exist to serve.
+        //
+        // Which step was still running is tracked so the timeout blames the
+        // right thing: a slow rebuild or tap check is not a missing grant, and
+        // saying so sends people to the wrong page.
+        let rebuildDrained = LockBox<Bool>()
+        let checkDrained = LockBox<Bool>()
+        let stopped = Self.runBounded(
+            teardownTimeout, label: "stopping the audio stream",
+            {
+                watchdogQueue.sync {}
+                rebuildDrained.set(true)
+                // A tap check in flight holds a throwaway tap on the same
+                // scope; the agent may be configuring the next capture as soon
+                // as this run returns.
+                probeQueue.sync {}
+                checkDrained.set(true)
+                session.stop()
+            })
+        if !stopped {
+            let budget = ConfigKey.formatNumber(teardownTimeout)
+            if rebuildDrained.get() != true {
+                Log.error("""
+                    the tap rebuild still running did not finish within \(budget)s; \
+                    finalizing the recording anyway. The rebuilt tap is torn down when \
+                    this process exits, so a recording started before then may capture \
+                    no system audio.
+                    """)
+            } else if checkDrained.get() != true {
+                Log.error("""
+                    the tap check still running did not finish within \(budget)s; \
+                    finalizing the recording anyway. The throwaway tap it opened is torn \
+                    down when this process exits, so a recording started before then may \
+                    capture no system audio.
+                    """)
+            } else {
+                Log.error("""
+                    the audio stream did not stop within \(budget)s; finalizing the \
+                    recording anyway. This usually means the capture never had a working \
+                    "System Audio Recording" grant (see docs/permissions.md).
+                    """)
+            }
         }
         _ = Self.runBounded(teardownTimeout, label: "draining pending writes", { ioQueue.sync {} })
         for sink in sinks + sourceSinks.map(\.1) {
