@@ -189,7 +189,12 @@ final class RemoteControlAgent: @unchecked Sendable {
         if !capturing, let error = outcome.error {
             throw error
         }
-        return Self.json(StartedResponse(snapshot: snap, capturing: capturing), .created)
+        // `snap` is as old as the wait, which can be a whole open window, so read
+        // the session again. Otherwise `state` and `muted` in the answer are from
+        // before the capture opened: a `/mute` or a `/stop` that landed during the
+        // wait would be missing from it.
+        return Self.json(
+            StartedResponse(snapshot: sessions.current() ?? snap, capturing: capturing), .created)
     }
 
     private func statusResponse() throws -> HTTPResponse {
