@@ -109,8 +109,10 @@ More copy-and-adapt wrappers live in [examples/](examples/) — including
 - **Capture anything.** The microphone, **all system audio** (`--system`),
   **specific apps** (`--app`), or **everything except** some apps
   (`--exclude-app`) — and optionally **mix in your mic** (`--mix`) for meetings.
-- **Live transcription.** Text streams as you speak, with a choice of engines:
-  local `whisper.cpp`, on-device Apple Speech, WhisperKit, or Parakeet.
+- **Live transcription.** Text lands while you talk, one line per pause, with a
+  choice of engines: local `whisper.cpp`, on-device Apple Speech, WhisperKit, or
+  Parakeet. `--live-streaming` transcribes continuously instead, so words appear
+  about 2 s after you say them and the line grows in place.
 - **Know who spoke.** `--speakers` labels turns by source (`You`/`Others`) and by
   voice (`Speaker 1..N`) using on-device CoreML — no cloud.
 - **Private by default.** Everything runs on-device; no telemetry, no network
@@ -402,6 +404,7 @@ hark models download large-v3-turbo            # whisper ggml
 hark models download whisperkit:large-v3-v20240930_626MB
 hark models download parakeet:v3               # or parakeet:v2 (English-only)
 hark models download fluidaudio:diarizer       # speaker diarization (--speakers)
+hark models download fluidaudio:streaming-asr  # live streaming (--live-streaming)
 ```
 
 The first whisper model you download becomes the default. `--default` makes any

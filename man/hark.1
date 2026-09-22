@@ -248,6 +248,35 @@ anyway (1\-60, default
 Must be greater than
 .BR \-\-segment\-pause .
 .TP
+.BR \-\-live\-streaming ", " \-\-no\-live\-streaming
+Live: transcribe continuously with the streaming multilingual model instead of
+one line per pause, so text appears about 2 s after it is spoken instead of 9 to
+12 s and the open line grows in place until
+.B \-\-segment\-pause
+closes it (default off).
+.B \-\-segment\-pause
+and
+.B \-\-segment\-window
+still cut the lines;
+.BR \-e ,
+.BR \-\-vad ,
+.BR \-\-vad\-threshold
+and
+.B \-\-gain
+do not apply, and hark names the ones you set on its standard error.
+.B \-\-silence\-threshold
+still applies: streaming does not segment on it, but the same run uses it for
+.BR \-\-split \ silence: n . Apple Silicon, English, Spanish, French, Italian,
+Portuguese and German; one 583 MB model on first use
+.RB ( "hark models download fluidaudio:streaming\-asr" ).
+It cannot
+.BR \-\-translate ,
+.B \-\-diarize\-engine offline
+ignores it, and pairing it with
+.B \-i
+is a usage error. Where it cannot run, hark prints why and the segmented path
+runs unchanged.
+.TP
 .BR \-\-vad ", " \-\-no\-vad
 Use the on\-device VAD for live segmentation (default on, Apple Silicon);
 .B \-\-no\-vad
@@ -348,7 +377,11 @@ channel with the offline diarizer, so on a file it is Apple\-Silicon\-first like
 every other
 .B \-i \-\-speakers
 run. Acoustic models download from Hugging Face on first use
-.RB ( "hark models download fluidaudio:diarizer" );
+.RB ( "hark models download fluidaudio:diarizer" ,
+and
+.B "hark models download fluidaudio:streaming\-asr"
+for
+.BR \-\-live\-streaming );
 on Intel a live capture falls back to
 .BR You / Others ,
 and
@@ -567,6 +600,12 @@ to disable the on\-device VAD used for live segmentation (falls back to the
 amplitude
 .B \-\-silence\-threshold
 method).
+.TP
+.B HARK_LIVE_STREAMING
+Set to
+.B 1
+to transcribe a live capture continuously with the streaming multilingual model
+.RB ( \-\-live\-streaming ).
 .TP
 .B HARK_GAIN
 Set to

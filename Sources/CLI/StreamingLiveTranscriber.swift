@@ -16,10 +16,11 @@ extension LiveTranscriber: LiveTranscriptionSink {}
 /// through a chunked recognizer and the growing token list is cut into transcript
 /// lines in hark.
 ///
-/// What the user sees: text about one chunk (2.24 s) behind the audio instead of
-/// 9 to 12 s, and an open line that grows in place until a pause closes it. The
-/// closed lines land in the same append-only `LiveTranscriptWriter` the segmented
-/// path uses, so the transcript file format does not change.
+/// What the user sees: text one chunk (560 ms) behind the decoder, about 2 s
+/// behind the audio end to end instead of 9 to 12 s, and an open line that grows
+/// in place until a pause closes it. The closed lines land in the same
+/// append-only `LiveTranscriptWriter` the segmented path uses, so the transcript
+/// file format does not change.
 ///
 /// Shape follows `VadSegmenter`: `write` runs on the capture I/O queue and only
 /// counts bytes and yields into an unbounded `AsyncStream`; one consumer `Task`
@@ -39,6 +40,10 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
     private let screenEcho: Bool
     private let screen: FileHandle
     private let transcriptLog: TranscriptLog?
+    /// How long `finalize()` waits for the decoder to drain before giving the
+    /// recording back (0 = wait indefinitely). Same budget as the rest of
+    /// `CaptureEngine`'s teardown.
+    private let finalizeTimeout: TimeInterval
 
     let label: String
 
@@ -49,6 +54,19 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
     private var totalBytes: UInt64 = 0
     private var pendingBytes: Int = 0
     private var finished = false
+    /// Set when `finalize()` gave up waiting for the decoder.
+    ///
+    /// The consumer Task can still be suspended inside `recognizer.process` at
+    /// that moment, holding a strong `self` for the duration of the call, and
+    /// cancelling it does not interrupt a decode that does not check. So every
+    /// route from that Task to something a client can observe is gated on this
+    /// flag instead. `CaptureEngine.run` hands the recording back as soon as
+    /// `finalize()` returns and `RemoteControlAgent` reports the session finished
+    /// immediately after, so a line appended later tears a transcript that a
+    /// client has already started reading. On the `--mix` path the two sinks share
+    /// one writer, so a late write can also land on a handle the other sink has
+    /// closed.
+    private var abandoned = false
     private var task: Task<Void, Never>? = nil
 
     // Owned exclusively by the consumer Task (no locks).
@@ -76,7 +94,8 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         labelName: String,
         screenEcho: Bool = false,
         screen: FileHandle = .standardOutput,
-        transcriptLog: TranscriptLog? = nil
+        transcriptLog: TranscriptLog? = nil,
+        finalizeTimeout: TimeInterval = CaptureEngine.defaultTeardownTimeout
     ) {
         self.recognizer = recognizer
         self.writer = writer
@@ -89,6 +108,7 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         self.screenEcho = screenEcho
         self.screen = screen
         self.transcriptLog = transcriptLog
+        self.finalizeTimeout = finalizeTimeout
         self.label = labelName
         self.cutter = StreamingLineCutter(
             gapSeconds: gapSeconds, maxLineSeconds: maxLineSeconds)
@@ -107,15 +127,29 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         let (stream, continuation) = AsyncStream<Data>.makeStream(
             of: Data.self, bufferingPolicy: .unbounded)
         self.continuation = continuation
-        self.task = Task { [self] in
-            for await data in stream { await consume(data) }
-            await drain()
-            done.signal()
+        // `weak self`, and the semaphore captured on its own: a strong capture
+        // here is a cycle (the Task retains the sink, the sink retains the Task)
+        // that only `finalize()` breaks, so a capture that throws after a sink is
+        // built would leave the Task suspended forever holding the recognizer's
+        // per-stream state and the shared model handles. `CaptureEngine.run`
+        // finalizes sinks on the normal path only.
+        let completion = done
+        self.task = Task { [weak self] in
+            for await data in stream { await self?.consume(data) }
+            await self?.drain()
+            completion.signal()
         }
         Log.verbose("""
             live transcription: streaming (nemotron multilingual \(NemotronStreamingModels.bundle))\
             \(speaker.map { " [\($0)]" } ?? ""); line gap \(gapSeconds)s, cap \(maxLineSeconds)s
             """)
+    }
+
+    /// A sink that is dropped without being finalized still has to release its
+    /// consumer `Task`: the stream it awaits is never finished otherwise, and the
+    /// Task would sit suspended for the life of the process.
+    deinit {
+        continuation.finish()
     }
 
     // MARK: AudioSink
@@ -139,7 +173,28 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         lock.unlock()
         guard !already else { return }
         continuation.finish()
-        done.wait()
+        // Bounded like every other teardown step in `CaptureEngine.run`: audio is
+        // never dropped, so a decoder minutes behind would hold the whole stop
+        // for minutes. The recording is already complete at this point; the words
+        // still in the decoder are what a timeout costs.
+        guard finalizeTimeout > 0 else {
+            done.wait()
+            return
+        }
+        if done.wait(timeout: .now() + finalizeTimeout) == .timedOut {
+            // Nothing this sink can still do may reach the transcript, the status
+            // partial or the screen: the caller is about to report the session
+            // finished. Cancel first (a decoder that checks for it stops now),
+            // then gate, so a decoder that does not check still cannot land a
+            // line after this returns.
+            lock.withLock { abandoned = true }
+            task?.cancel()
+            Log.notice("""
+                live streaming transcription did not finish decoding within \
+                \(ConfigKey.formatNumber(finalizeTimeout))s; the recording is complete \
+                and the words still in the decoder were dropped from the transcript
+                """)
+        }
     }
 
     /// Async variant of `finalize()` for callers already inside the Swift
@@ -175,7 +230,12 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
 
     // MARK: Consumer (single Task)
 
+    /// True once `finalize()` has given up on this sink. Read under the lock: the
+    /// consumer Task and the finalizing thread are different threads.
+    private var isAbandoned: Bool { lock.withLock { abandoned } }
+
     private func consume(_ data: Data) async {
+        guard !isAbandoned else { return }
         let backlog = lock.withLock { () -> Double in
             pendingBytes -= data.count
             return Double(pendingBytes) / Double(max(1, captureFormat.byteRate))
@@ -195,7 +255,7 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
     }
 
     private func drain() async {
-        if !decodeStopped {
+        if !decodeStopped, !isAbandoned {
             let tail = resampler.flush()
             if !tail.isEmpty { await feed(tail) }
             do {
@@ -219,12 +279,19 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         do {
             tokens = try await recognizer.process(samples)
         } catch {
+            decodeStopped = true
+            // A decode cut short by our own `finalize()` timeout is not a decode
+            // failure, and the timeout has already said so. Warning twice, the
+            // second time about the wrong cause, is worse than not warning.
+            if isAbandoned || error is CancellationError {
+                Log.verbose("streaming decode stopped at teardown: \(error)")
+                return
+            }
             // A decode failure costs the transcript from here on, never the
             // recording: stop feeding, keep capturing.
             Log.notice(
                 "live streaming transcription stopped after a decode error; the recording continues")
             Log.verbose("streaming decode error: \(error)")
-            decodeStopped = true
             control?.setPartial(nil, for: sourceKey)
             return
         }
@@ -244,6 +311,7 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
 
     /// Writes one closed line to the transcript (and the interactive surfaces).
     private func emit(_ tokens: [RecognizedToken], _ range: Range<Int>) {
+        guard !isAbandoned else { return }
         let line = SentencePieceText.trimmingLeadingPunctuation(tokens[range])
         guard let first = line.first, let last = line.last else { return }
         let text = SentencePieceText.join(line)
@@ -269,7 +337,7 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
     /// Publishes the open line for `GET /status`, or clears it when nothing is
     /// pending.
     private func publishPartial(_ tokens: [RecognizedToken]) {
-        guard let control else { return }
+        guard let control, !isAbandoned else { return }
         let finalized = cutter.finalized
         guard finalized < tokens.count else {
             control.setPartial(nil, for: sourceKey)

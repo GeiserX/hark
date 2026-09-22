@@ -133,7 +133,13 @@ Stopping is also bounded: if the audio stream can't be torn down (most often a
 missing or stale **System Audio Recording** grant, which has been seen to block
 the Core Audio teardown indefinitely), hark reports it and finalizes the
 recording anyway so the audio captured so far stays playable — after
-`$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely).
+`$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely). The same
+budget bounds how long a `--live-streaming` run waits at stop for its decoder to
+catch up, so a decoder that has fallen behind costs the last words of the
+transcript rather than the stop. Those words are dropped, not delivered late: once
+the budget expires hark stops that sink writing, so the transcript is complete and
+final the moment stop returns and a client reading it on the finished signal never
+sees it grow.
 
 Starting has its own bound. The remote-control agent's
 [`POST /start`](remote-control.md) answers once the capture is open — with
@@ -187,6 +193,22 @@ The open line grows in place until `--segment-pause` closes it, or
 `--segment-window` cuts it. Closed lines go into the transcript file exactly as
 before. The open line is written nowhere, and with `--remote-control` the agent
 serves it as `session.partial` on [`GET /status`](remote-control.md).
+
+The recognizer decodes every chunk and cuts lines out of its own token stream, so
+the streaming path ignores `-e/--engine`, `--vad`, `--vad-threshold` and `--gain`.
+Only `--segment-pause` and `--segment-window` still shape the lines.
+`--silence-threshold` is not in that list: streaming does not segment on it, but
+the same run still uses it for `--split silence:<n>`. hark names the ones you set
+yourself, by flag, environment or config, when streaming starts. That notice goes
+to hark's standard error, so it reaches you in a terminal but not through the
+[remote-control API](remote-control.md), which has no field for it. A configured `engine: parakeet` never turns into the
+streaming model unannounced.
+
+A pause (interactive space, or [`POST /pause`](remote-control.md)) drops the
+captured audio, so the decoder's clock does not advance across it. Words spoken
+after a resume join the line that was open before it. Timestamps stay right,
+because the audio file excludes the paused time too. Only the line break is
+missing.
 
 Off by default. Turn it on per run, or with `$HARK_LIVE_STREAMING` or the
 `live-streaming` config key. It needs Apple Silicon and covers English, Spanish,

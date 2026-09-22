@@ -975,10 +975,56 @@ struct Hark: ParsableCommand {
 
     /// Whether `--live-streaming` has anything to do: it is on, and there is a
     /// transcript output for the closed lines to go into. `hark -o audio.opus`
-    /// with `live-streaming true` in the config must not pull a 612 MB model it
+    /// with `live-streaming true` in the config must not pull a 583 MB model it
     /// would never feed. Pure, for testing.
     static func streamingRequested(settings: ResolvedSettings, hasTranscript: Bool) -> Bool {
         settings.liveStreaming && hasTranscript
+    }
+
+    /// The settings the streaming path cannot honour, named as the user set them,
+    /// and only those that were set deliberately (flag, `$HARK_*`, or config).
+    ///
+    /// Streaming builds its transcript lines from `--segment-pause`/`--segment-window`
+    /// only. The recognizer is the Nemotron streaming model whatever `--engine`
+    /// says, and its encoder consumes every chunk, so nothing consults the VAD or
+    /// the gain normalizer. Silence about that is how someone with
+    /// `engine: parakeet` in their config ends up transcribing with something else
+    /// and never hears of it.
+    ///
+    /// `--silence-threshold` is deliberately absent. Streaming does not segment on
+    /// it, but the same live run still hands it to `makeAudioSink`, where it sets
+    /// every boundary for `--split silence:<n>`. Naming it would tell a user their
+    /// split threshold was ignored while it was deciding where each file ended.
+    /// Pure, for testing.
+    static func streamingIgnoredSettings(
+        from a: Hark,
+        environment env: [String: String] = ProcessInfo.processInfo.environment,
+        config: Configuration = .load()
+    ) -> [String] {
+        var named: [String] = []
+        func check(_ name: String, _ key: ConfigKey, flag: Bool, configured: Bool) {
+            let fromEnv = env[key.environmentName].map { !$0.isEmpty } ?? false
+            if flag || fromEnv || configured { named.append(name) }
+        }
+        // `--vad` and `--gain` are `.prefixedNo` flags, so the user may well have
+        // written `--no-vad` or `--no-gain`. Naming the positive spelling sends
+        // them looking through their own command line for a flag that is not
+        // there. Only a flag has a spelling; a value from `$HARK_*` or the config
+        // file is named by its setting.
+        func spelling(_ base: String, _ value: Bool?) -> String {
+            value == false ? "--no-" + base.dropFirst(2) : base
+        }
+        check("--engine", .engine, flag: a.engine != nil, configured: config.engine != nil)
+        check(
+            spelling("--vad", a.useVad), .vad, flag: a.useVad != nil,
+            configured: config.vad != nil)
+        check(
+            "--vad-threshold", .vadThreshold, flag: a.vadThreshold != nil,
+            configured: config.vadThreshold != nil)
+        check(
+            spelling("--gain", a.useGain), .gain, flag: a.useGain != nil,
+            configured: config.gain != nil)
+        return named
     }
 
     /// Loads the shared streaming ASR models when `--live-streaming` is on, or
@@ -1003,7 +1049,17 @@ struct Hark: ParsableCommand {
             break
         }
         do {
-            return try NemotronStreamingModels.load(language: settings.language)
+            let models = try NemotronStreamingModels.load(language: settings.language)
+            // Only once the models are in hand: a failed load falls back to the
+            // segmented path, where every one of these settings does apply.
+            let ignored = Self.streamingIgnoredSettings(from: self)
+            if !ignored.isEmpty {
+                Log.notice("""
+                    live streaming ignores \(ignored.joined(separator: ", ")): it decodes \
+                    with the streaming multilingual model and segments on its own
+                    """)
+            }
+            return models
         } catch let error as HarkError {
             Log.notice("live streaming unavailable (\(error.message)); using the segmented path")
             return nil
