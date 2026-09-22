@@ -80,6 +80,11 @@ ffmpeg -i call.wav -filter_complex "channelsplit=channel_layout=stereo[l][r]" \
 hark -i them.wav -t them.txt        # transcribe just the other side
 ```
 
+Splitting is for when you want two audio files. To find out who said what you do
+not need it: `hark -i call.wav --speakers` attributes the recording as it stands,
+and a file written with `--tracks stereo` is exactly the two-channel input that
+per-channel attribution reads.
+
 `mixed` is the default and is exactly today's output. Worth knowing before you
 switch:
 
