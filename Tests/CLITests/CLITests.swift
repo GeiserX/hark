@@ -1,5 +1,6 @@
 import ArgumentParser
 import Encoders
+import FluidAudio
 import Foundation
 import Testing
 
@@ -80,6 +81,28 @@ struct RootParsingTests {
         #expect(throws: (any Error).self) {
             _ = try Hark.parse(arguments)
         }
+    }
+
+    /// Zero is rejected, so neither the flag message nor the config message may
+    /// describe the bound as a range that contains zero.
+    @Test func segmentPauseRejectionExcludesZero() {
+        var flagMessage = "nothing thrown"
+        do {
+            _ = try Hark.parse(["--segment-pause", "0"])
+            Issue.record("--segment-pause 0 was accepted")
+        } catch {
+            flagMessage = "\(error)"
+        }
+        #expect(flagMessage.contains("greater than 0"), "flag: \(flagMessage)")
+
+        var configMessage = "nothing thrown"
+        do {
+            _ = try ConfigKey.parseSegmentPause("0", .segmentPause)
+            Issue.record("segment-pause 0 was accepted")
+        } catch {
+            configMessage = "\(error)"
+        }
+        #expect(configMessage.contains("greater than 0"), "config: \(configMessage)")
     }
 
     @Test(arguments: [
@@ -1236,6 +1259,25 @@ struct SpeakerLabelsParseTests {
         #expect(custom.others == "Them")
         // Malformed -> defaults (validation rejects these before we get here).
         #expect(SpeakerLabels.parse("solo").you == "You")
+    }
+}
+
+/// The pause and the window are handed to FluidAudio's own segmentation config,
+/// so the ends of the ranges the CLI advertises have to survive that hand-off
+/// unchanged. Building the config needs no model, unlike running the VAD.
+@Suite("VAD segmentation config bounds")
+struct VadSegmentationConfigBoundsTests {
+    @Test(arguments: [(0.01, 60.0), (5.0, 5.1), (0.7, 12.0)])
+    func rangeEndsSurviveTheHandOffToFluidAudio(pause: Double, window: Double) throws {
+        let hark = try Hark.parse([
+            "--segment-pause", "\(pause)", "--segment-window", "\(window)",
+        ])
+        #expect(hark.segmentPause == pause)
+        #expect(hark.segmentWindow == window)
+
+        let config = VadSegmentationConfig(minSilenceDuration: pause, maxSpeechDuration: window)
+        #expect(config.minSilenceDuration == pause)
+        #expect(config.maxSpeechDuration == window)
     }
 }
 

@@ -222,7 +222,8 @@ enum ConfigKey: String, CaseIterable {
             throw HarkError.usage("\(key.rawValue) must be a number of seconds (got '\(value)').")
         }
         guard n > 0 && n <= 5 else {
-            throw HarkError.usage("\(key.rawValue) must be between 0 and 5 seconds.")
+            throw HarkError.usage(
+                "\(key.rawValue) must be greater than 0 and at most 5 seconds.")
         }
         return n
     }

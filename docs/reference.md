@@ -107,7 +107,7 @@ unaffected; disable with `HARK_GAIN=off`).
 ### Segment timing
 
 A live transcript line appears when the speaker pauses for `--segment-pause`
-seconds (0–5, default `0.7`), or when unbroken speech reaches `--segment-window`
+seconds (over 0, up to 5; default `0.7`), or when unbroken speech reaches `--segment-window`
 seconds (1–60, default `12`). Lower both to see text sooner, at the cost of
 shorter segments with less context for the engine. The window must be greater
 than the pause. Both apply to the VAD path and to the amplitude fallback

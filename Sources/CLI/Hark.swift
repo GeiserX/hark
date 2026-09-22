@@ -196,7 +196,7 @@ struct Hark: ParsableCommand {
     var vadThreshold: Double?
 
     @Option(name: .customLong("segment-pause"), help: ArgumentHelp(
-        "Live: seconds of silence that end a transcript segment (0–5; default 0.7). "
+        "Live: seconds of silence that end a transcript segment (over 0, up to 5; default 0.7). "
             + "Lower emits lines sooner. Or $HARK_SEGMENT_PAUSE / config.",
         valueName: "sec"))
     var segmentPause: Double?
@@ -507,7 +507,8 @@ struct Hark: ParsableCommand {
             throw ValidationError("--vad-threshold must be between 0 and 1.")
         }
         if let segmentPause, !(segmentPause > 0 && segmentPause <= 5) {
-            throw ValidationError("--segment-pause must be between 0 and 5 seconds.")
+            throw ValidationError(
+                "--segment-pause must be greater than 0 and at most 5 seconds.")
         }
         if let segmentWindow, !(segmentWindow >= 1 && segmentWindow <= 60) {
             throw ValidationError("--segment-window must be between 1 and 60 seconds.")
