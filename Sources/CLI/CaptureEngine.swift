@@ -37,7 +37,12 @@ struct CaptureEngine {
     /// the HAL teardown calls, which used to hang the whole process — and, in
     /// the remote agent, every later session. `$HARK_TEARDOWN_TIMEOUT`, 0 = wait
     /// indefinitely (the old behavior).
-    var teardownTimeout: TimeInterval =
+    var teardownTimeout: TimeInterval = CaptureEngine.defaultTeardownTimeout
+
+    /// The resolved `$HARK_TEARDOWN_TIMEOUT` (5 s by default, 0 = wait
+    /// indefinitely). Shared so every teardown step that can block, including a
+    /// sink's own `finalize()`, is bounded by the same budget.
+    static let defaultTeardownTimeout: TimeInterval =
         ProcessInfo.processInfo.environment["HARK_TEARDOWN_TIMEOUT"].flatMap(Double.init) ?? 5
 
     /// Builds the capture session, output PCM format, and a human-readable

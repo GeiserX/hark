@@ -39,6 +39,10 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
     private let screenEcho: Bool
     private let screen: FileHandle
     private let transcriptLog: TranscriptLog?
+    /// How long `finalize()` waits for the decoder to drain before giving the
+    /// recording back (0 = wait indefinitely). Same budget as the rest of
+    /// `CaptureEngine`'s teardown.
+    private let finalizeTimeout: TimeInterval
 
     let label: String
 
@@ -76,7 +80,8 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         labelName: String,
         screenEcho: Bool = false,
         screen: FileHandle = .standardOutput,
-        transcriptLog: TranscriptLog? = nil
+        transcriptLog: TranscriptLog? = nil,
+        finalizeTimeout: TimeInterval = CaptureEngine.defaultTeardownTimeout
     ) {
         self.recognizer = recognizer
         self.writer = writer
@@ -89,6 +94,7 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         self.screenEcho = screenEcho
         self.screen = screen
         self.transcriptLog = transcriptLog
+        self.finalizeTimeout = finalizeTimeout
         self.label = labelName
         self.cutter = StreamingLineCutter(
             gapSeconds: gapSeconds, maxLineSeconds: maxLineSeconds)
@@ -107,15 +113,29 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         let (stream, continuation) = AsyncStream<Data>.makeStream(
             of: Data.self, bufferingPolicy: .unbounded)
         self.continuation = continuation
-        self.task = Task { [self] in
-            for await data in stream { await consume(data) }
-            await drain()
-            done.signal()
+        // `weak self`, and the semaphore captured on its own: a strong capture
+        // here is a cycle (the Task retains the sink, the sink retains the Task)
+        // that only `finalize()` breaks, so a capture that throws after a sink is
+        // built would leave the Task suspended forever holding the recognizer's
+        // per-stream state and the shared model handles. `CaptureEngine.run`
+        // finalizes sinks on the normal path only.
+        let completion = done
+        self.task = Task { [weak self] in
+            for await data in stream { await self?.consume(data) }
+            await self?.drain()
+            completion.signal()
         }
         Log.verbose("""
             live transcription: streaming (nemotron multilingual \(NemotronStreamingModels.bundle))\
             \(speaker.map { " [\($0)]" } ?? ""); line gap \(gapSeconds)s, cap \(maxLineSeconds)s
             """)
+    }
+
+    /// A sink that is dropped without being finalized still has to release its
+    /// consumer `Task`: the stream it awaits is never finished otherwise, and the
+    /// Task would sit suspended for the life of the process.
+    deinit {
+        continuation.finish()
     }
 
     // MARK: AudioSink
@@ -139,7 +159,21 @@ final class StreamingLiveTranscriber: LiveTranscriptionSink, @unchecked Sendable
         lock.unlock()
         guard !already else { return }
         continuation.finish()
-        done.wait()
+        // Bounded like every other teardown step in `CaptureEngine.run`: audio is
+        // never dropped, so a decoder minutes behind would hold the whole stop
+        // for minutes. The recording is already complete at this point; the words
+        // still in the decoder are what a timeout costs.
+        guard finalizeTimeout > 0 else {
+            done.wait()
+            return
+        }
+        if done.wait(timeout: .now() + finalizeTimeout) == .timedOut {
+            Log.notice("""
+                live streaming transcription did not finish decoding within \
+                \(ConfigKey.formatNumber(finalizeTimeout))s; the recording is complete \
+                and the last words may be missing from the transcript
+                """)
+        }
     }
 
     /// Async variant of `finalize()` for callers already inside the Swift

@@ -58,6 +58,26 @@ private final class ScriptedStreamingRecognizer: StreamingRecognizer, @unchecked
     func finish() async throws -> [RecognizedToken] { script.map(\.token) }
 }
 
+/// A decoder that never answers, standing in for one wedged inside CoreML (or
+/// simply minutes behind). `finalize()` has to give the recording back anyway.
+private final class StalledStreamingRecognizer: StreamingRecognizer, @unchecked Sendable {
+    let chunkSamples = 4000
+
+    func process(_ samples: [Float]) async throws -> [RecognizedToken] {
+        try await Task.sleep(for: .seconds(3600))
+        return []
+    }
+
+    func finish() async throws -> [RecognizedToken] { [] }
+}
+
+/// Holds a sink weakly so a test can watch it be deallocated. ARC's side table
+/// makes the weak read safe from the polling closure; the box itself is never
+/// mutated after the sink is dropped.
+private final class WeakSinkBox: @unchecked Sendable {
+    weak var sink: StreamingLiveTranscriber?
+}
+
 /// Fixed acoustic label, standing in for the live diarizer.
 private final class FakeResolver: LiveSpeakerResolver, @unchecked Sendable {
     private let name: String
@@ -276,6 +296,90 @@ struct StreamingTranscriptionTests {
         await sink.finalizeAsync()
         #expect(try readLines(path).map(\.text) == ["so far"])
         #expect(control.partialLine == nil)
+    }
+
+    /// The shipping path. `CaptureEngine.run` finalizes its sinks with the
+    /// synchronous `finalize()`, never `finalizeAsync()`, so the semaphore
+    /// handshake and the tail flush at teardown are otherwise untested. This is
+    /// the positive control that the handshake completes at all.
+    ///
+    /// `finalize()` runs on a real thread, as it does in production: blocking a
+    /// cooperative worker instead starves the consumer `Task` it waits for (see
+    /// `offCooperativePool`).
+    @Test func finalizeFlushesTheTailFromABlockingCaller() async throws {
+        let path = tempTranscriptPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let recognizer = ScriptedStreamingRecognizer(
+            chunkSamples: 4000,
+            script: [
+                (0.25, token("\u{2581}tail", 0.0)),
+                (0.5, token("\u{2581}flush", 0.08)),
+            ])
+        let writer = try LiveTranscriptWriter(destination: .file(path), format: .json)
+        let sink = StreamingLiveTranscriber(
+            recognizer: recognizer, writer: writer, ownsWriter: true, speaker: "You",
+            resolver: nil, captureFormat: captureFormat, control: nil, sourceKey: "mic",
+            gapSeconds: 0.7, maxLineSeconds: 12, labelName: "test")
+        let chunk = silence(0.25)
+        try await offCooperativePool {
+            try sink.write(chunk)
+            try sink.write(chunk)
+            // No pause has closed the line, so the only way these words reach the
+            // transcript is the tail flush inside the finalize handshake.
+            try sink.finalize()
+        }
+        let lines = try readLines(path)
+        #expect(lines.map(\.text) == ["tail flush"])
+        #expect(try #require(lines.first).speaker == "You")
+    }
+
+    /// A sink built and then abandoned (the second `makeRecognizer()` of a
+    /// two-source capture throws, or `session.start` does) is never finalized, so
+    /// its consumer `Task` must not be what keeps it alive. A strong capture there
+    /// pins the recognizer's per-stream state and the shared model handles for the
+    /// life of the process, which in the long-lived remote agent is per `POST /start`.
+    @Test func releasesASinkThatIsNeverFinalized() async throws {
+        let path = tempTranscriptPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let abandoned = WeakSinkBox()
+        func buildThenDrop() throws {
+            let recognizer = ScriptedStreamingRecognizer(
+                chunkSamples: 4000, script: [(0.25, token("\u{2581}gone", 0.0))])
+            let writer = try LiveTranscriptWriter(destination: .file(path), format: .json)
+            let sink = StreamingLiveTranscriber(
+                recognizer: recognizer, writer: writer, ownsWriter: true, speaker: nil,
+                resolver: nil, captureFormat: captureFormat, control: nil, sourceKey: "single",
+                gapSeconds: 0.7, maxLineSeconds: 12, labelName: "test")
+            abandoned.sink = sink
+            try sink.write(silence(0.25))
+        }
+        try buildThenDrop()
+        try await waitUntil { abandoned.sink == nil }
+        #expect(abandoned.sink == nil, "the consumer Task still retains a sink nobody finalized")
+    }
+
+    /// Stop is bounded. A decoder that never answers used to hold `finalize()`
+    /// open for as long as it stayed behind, which in `CaptureEngine.run` is the
+    /// one step before the recording is handed back.
+    @Test func finalizeGivesUpOnADecoderThatNeverAnswers() async throws {
+        let path = tempTranscriptPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let writer = try LiveTranscriptWriter(destination: .file(path), format: .json)
+        let sink = StreamingLiveTranscriber(
+            recognizer: StalledStreamingRecognizer(), writer: writer, ownsWriter: true,
+            speaker: nil, resolver: nil, captureFormat: captureFormat, control: nil,
+            sourceKey: "single", gapSeconds: 0.7, maxLineSeconds: 12, labelName: "test",
+            finalizeTimeout: 1)
+        let chunk = silence(0.25)
+        // A real thread, so the decoder genuinely gets to run and hang: the only
+        // reason `finalize()` comes back is the bound.
+        let waited = try await offCooperativePool { () -> Duration in
+            try sink.write(chunk)
+            let started = ContinuousClock.now
+            try sink.finalize()
+            return ContinuousClock.now - started
+        }
+        #expect(waited < .seconds(15))
     }
 
     /// Two streams publish independently: clearing one leaves the other, and the
