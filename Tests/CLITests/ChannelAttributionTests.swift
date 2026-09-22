@@ -265,8 +265,16 @@ struct ChannelAttributionDispatchTests {
     }
 
     /// A quarter-second 440 Hz tone: enough to be a real audio file.
+    ///
+    /// The phase is a separate annotated `let` because the one-line form made
+    /// the type checker give up on the CI toolchain: untyped literals either
+    /// side of `.pi` leave it too many overloads to try. The samples are
+    /// bit-identical to the single-expression version.
     private func tone() -> [Float] {
-        (0..<4000).map { Float(sin(2 * .pi * 440 * Double($0) / 16000)) * 0.5 }
+        (0..<4000).map { i -> Float in
+            let phase: Double = 2 * Double.pi * 440 * Double(i) / 16000
+            return Float(sin(phase)) * 0.5
+        }
     }
 }
 
