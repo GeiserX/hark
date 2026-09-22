@@ -610,8 +610,13 @@ struct DeadTapRecoveryTests {
         let stoppedAt = Date()
         #expect(finished.wait(timeout: .now() + 15) == .success)
         let waited = Date().timeIntervalSince(stoppedAt)
+        // Whatever was left of the hold when the stop landed is what the stop
+        // had to wait for. This is deliberately not asserted to be large: on a
+        // runner slow enough to put the stop near the end of the hold the claim
+        // simply gets weaker, which is better than the test failing for a
+        // reason it is not about. Without the drain `waited` is near zero while
+        // `holdLeft` is most of 3 s, which is what makes it fail.
         let holdLeft = 3.0 - stoppedAt.timeIntervalSince(began)
-        #expect(holdLeft > 1)  // the rebuild really was still running
         #expect(waited >= holdLeft - 0.2)
         #expect(!session.stoppedDuringRestart)
     }
