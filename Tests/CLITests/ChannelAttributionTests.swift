@@ -265,8 +265,18 @@ struct ChannelAttributionDispatchTests {
     }
 
     /// A quarter-second 440 Hz tone: enough to be a real audio file.
+    ///
+    /// The phase is a separate, explicitly typed `Double` and the closure
+    /// declares its return type. Written as one expression with four untyped
+    /// literals, Swift 6.0.3 (Xcode 16.2, the newest the macos-14 CI runner
+    /// carries) gives up type-checking it with "unable to type-check this
+    /// expression in reasonable time", while Swift 6.4 solves it fine. The
+    /// arithmetic is unchanged.
     private func tone() -> [Float] {
-        (0..<4000).map { Float(sin(2 * .pi * 440 * Double($0) / 16000)) * 0.5 }
+        (0..<4000).map { index -> Float in
+            let phase: Double = 2 * Double.pi * 440 * Double(index) / 16000
+            return Float(sin(phase)) * 0.5
+        }
     }
 }
 
