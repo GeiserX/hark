@@ -161,6 +161,22 @@ struct StreamingTranscriptionTests {
         #expect(cutter.finalized == 0)
     }
 
+    /// `--segment-pause 0` is a legal setting, and tokens are one 80 ms encoder
+    /// frame each with no space between them, so an unclamped gap of 0 finds a
+    /// break between every adjacent pair and gives every token its own transcript
+    /// line. Contiguous speech is one line, closed by the trailing silence.
+    @Test func keepsContiguousTokensTogetherWhenThePauseIsZero() {
+        var cutter = StreamingLineCutter(gapSeconds: 0, maxLineSeconds: 12)
+        let tokens = [
+            token("\u{2581}one", 0), token("\u{2581}two", 0.08), token("\u{2581}three", 0.16),
+        ]
+        // Decoded audio ends with the last token, so nothing has closed yet.
+        #expect(cutter.cut(tokens: tokens, processedSeconds: 0.24) == [])
+        // One frame of silence past it closes the line, all three tokens at once.
+        #expect(cutter.cut(tokens: tokens, processedSeconds: 0.32) == [0..<3])
+        #expect(cutter.finalized == 3)
+    }
+
     @Test func cutsOnTheWindowCap() {
         var cutter = StreamingLineCutter(gapSeconds: 0.7, maxLineSeconds: 12)
         // A monologue: one token every 0.3 s for 13 s, so no gap ever reaches 0.7.

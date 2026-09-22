@@ -75,7 +75,13 @@ enum SentencePieceText {
 /// `finalized` is the watermark: every token before it is already written to the
 /// transcript, everything from it onward is the open line.
 struct StreamingLineCutter {
-    /// Silence between two tokens that closes a line (`--segment-pause`).
+    /// One encoder frame, the floor under any gap the token stream can express:
+    /// tokens are one frame each and adjacent ones touch, so a smaller threshold
+    /// sees a gap between every pair of words.
+    static let encoderFrameSeconds = 0.08
+
+    /// Silence between two tokens that closes a line (`--segment-pause`, clamped
+    /// to one encoder frame).
     let gapSeconds: Double
     /// Longest a single line may run before it is cut anyway (`--segment-window`).
     let maxLineSeconds: Double
@@ -83,7 +89,11 @@ struct StreamingLineCutter {
     private(set) var finalized = 0
 
     init(gapSeconds: Double, maxLineSeconds: Double) {
-        self.gapSeconds = gapSeconds
+        // `--segment-pause 0` is legal (`parseSegmentPause` allows 0 to 5) and the
+        // segmented path degrades gracefully at 0, cutting on the VAD instead.
+        // Here the comparison is against adjacent token timings, so 0 would put
+        // every single token on its own transcript line.
+        self.gapSeconds = max(gapSeconds, Self.encoderFrameSeconds)
         self.maxLineSeconds = maxLineSeconds
     }
 
