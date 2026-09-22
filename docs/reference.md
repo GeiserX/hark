@@ -135,6 +135,15 @@ the Core Audio teardown indefinitely), hark reports it and finalizes the
 recording anyway so the audio captured so far stays playable — after
 `$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely).
 
+Starting has its own bound. The remote-control agent's
+[`POST /start`](remote-control.md) answers once the capture is open — with
+`--live-streaming` a recognizer model that is not in memory yet can hold that for
+tens of seconds — or after `$HARK_START_TIMEOUT` seconds (default 60), whichever
+comes first. Both that answer and `GET /status` carry `capturing`: true once the
+sources are open, so anything said from then on is recorded. `state` says
+`recording` from the moment a start is accepted, which is earlier, so `capturing`
+is the one to trust.
+
 ## Working directory
 
 `-C, --directory PATH` resolves **relative** artifact paths (`-i`, `-a`, `-t`,

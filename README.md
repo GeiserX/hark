@@ -365,6 +365,8 @@ hark --remote-control                          # bind 127.0.0.1 on the configure
 
 curl -s -X POST http://127.0.0.1:8473/start \
   -d '{"system":true,"mix":true,"audio":"call.m4a","transcript":"call.srt"}'
+# /start answers once the capture is really open, so give it a generous client
+# timeout: a cold --live-streaming model has held it for 22.8 s ($HARK_START_TIMEOUT).
 curl -s http://127.0.0.1:8473/status
 curl -s -X POST http://127.0.0.1:8473/mute     # silence only the mic (mix capture)
 curl -s -X POST http://127.0.0.1:8473/unmute
