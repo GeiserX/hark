@@ -480,4 +480,18 @@ struct SlowStartAnswerTests {
         failed.markRunEnded()
         #expect(await failed.waitUntilCapturing(timeout: 1) == false)      // released early, not after 1 s
     }
+
+    /// A `POST /stop` arriving while the start is still waiting has to end the
+    /// wait. The engine installs its stop handler only once the sources are up, so
+    /// the open runs to completion and the gate opens afterwards — leaving the
+    /// start to answer `201` with `capturing: true` after the client had already
+    /// been answered `200` for its stop.
+    @Test func aStopDuringTheWaitEndsIt() async {
+        let control = CaptureControl()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { control.stop() }
+
+        let started = Date()
+        #expect(await control.waitUntilCapturing(timeout: 5) == false)
+        #expect(Date().timeIntervalSince(started) < 2)   // ended on the stop, not on the timeout
+    }
 }

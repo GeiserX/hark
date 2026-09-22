@@ -72,7 +72,12 @@ final class CaptureControl: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(timeout)
         while true {
             let (capturing, ended) = snapshotGate()
-            if capturing || ended || Date() >= deadline { return capturing }
+            // A stop while the answer is still waiting ends the wait. The engine
+            // installs its stop handler only once the sources are up, so the open
+            // runs to completion regardless; without this the start would answer
+            // `201` with `capturing: true` after the client's own `/stop` had
+            // already been answered `200`.
+            if capturing || ended || isStopped || Date() >= deadline { return capturing }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
