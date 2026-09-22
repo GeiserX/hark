@@ -156,8 +156,9 @@ enum BatchDiarization {
 
     /// One pass over one channel (or the whole file) with a diarizer and a
     /// transcription backend the caller owns, so a caller that reads several
-    /// channels of the same file loads each model once rather than once per
-    /// channel.
+    /// channels of the same file loads the transcription model once rather than
+    /// once per channel. The diarizer is the caller's to keep or rebuild: it
+    /// remembers the voices it has already seen.
     private static func diarizeToCues(
         audioPath: String, diarizer: SpeakerDiarizer, backend: TranscriptionBackend,
         language: String?, translate: Bool, relabel: String?, channel: Int?
@@ -204,16 +205,21 @@ enum BatchDiarization {
         translate: Bool, threshold: Double?, labels: SpeakerLabels
     ) throws -> [TranscriptCue] {
         try requireSourceChannels(AudioPipeline.channelCount(of: audioPath), path: audioPath)
-        // One diarizer and one backend for both channels: the two passes ask for
-        // the same single speaker at the same threshold and the same engine, so
-        // building them per channel loaded and tore down pyannote and the
-        // transcription model twice for one file.
-        let diarizer = try SpeakerDiarizer.makeOffline(maxSpeakers: 1, threshold: threshold)
+        // One transcription backend for both channels, since it is the larger
+        // load and `transcribe` carries nothing between calls. A diarizer each,
+        // on purpose. FluidAudio's `DiarizerManager` holds its speaker database
+        // in a stored property that diarizing never resets, so one instance
+        // would match the call's voices against the microphone's at an
+        // assignment cutoff of `clusteringThreshold * 1.2`, the 0.78 that
+        // `DiarizationDefaults` tunes to keep two people apart. No cue could be
+        // mislabeled, because `relabel` overwrites the speaker per channel, but
+        // spans that belong apart would collapse and move the cue boundaries.
         let backend = try TranscriptionEngine.makeBatch(
             engineName: engineName, modelFlag: modelFlag, language: language, translate: translate)
         defer { backend.shutdown() }
         func cues(channel: Int, label: String) throws -> [TranscriptCue] {
-            try diarizeToCues(
+            let diarizer = try SpeakerDiarizer.makeOffline(maxSpeakers: 1, threshold: threshold)
+            return try diarizeToCues(
                 audioPath: audioPath, diarizer: diarizer, backend: backend, language: language,
                 translate: translate, relabel: label, channel: channel)
         }
