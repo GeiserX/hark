@@ -167,8 +167,8 @@ system-only session omits it, and so does any session recorded with
 
 | `state` | meaning |
 | --- | --- |
-| `ok` | audio is arriving, or the run of zeros is still shorter than `$HARK_TAP_SILENCE_SECONDS` (10 s by default) |
-| `unknown` | nothing has been measured, so there is no verdict either way: the throwaway tap could not be built to judge a long run of zeros. Not the same as `silent` |
+| `ok` | audio has arrived at least once, and either it still is or the current run of zeros is shorter than `$HARK_TAP_SILENCE_SECONDS` (10 s by default) |
+| `unknown` | nothing has been measured, so there is no verdict either way. Either the tap has not delivered a single non-zero sample yet, which is what a missing or stale **System Audio Recording** grant looks like and which stays `unknown` for the whole recording, or a run of zeros was long enough to question but the throwaway tap could not be built to answer it. Not the same as `silent` |
 | `silent` | the tap delivers zeros and a second, throwaway tap hears nothing either: nobody is talking |
 | `dead` | the throwaway tap hears audio the recording does not. The tap is being rebuilt, or a rebuild has not brought audio back yet |
 | `recovered` | audio came back after a rebuild. Stays until the next long silence is judged |

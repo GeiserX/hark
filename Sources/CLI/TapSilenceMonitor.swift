@@ -77,7 +77,12 @@ final class TapSilenceMonitor: @unchecked Sendable {
     /// where that teardown has been seen to block. Same gate, same reason, as
     /// `StallWatchdog.sawAudio`.
     private var sawAudio = false
-    private var state = State.ok
+    /// `unknown` until a non-silent cycle arrives: before that nothing has been
+    /// measured, and a tap that stays silent from its first cycle to its last
+    /// (the missing-grant case) would otherwise report `ok` for the whole
+    /// recording, which is the one answer a client must not be given when it is
+    /// asking whether system audio is being captured at all.
+    private var state = State.unknown
     private var restarts = 0
     private var runStartedAt: Date?
     private var lastSilentCycleAt: Date?
@@ -127,6 +132,9 @@ final class TapSilenceMonitor: @unchecked Sendable {
             return
         }
         sawAudio = true
+        // The first audio is what turns "nothing measured" into a verdict, and
+        // it arrives outside any zero run, so this cannot wait for `endRun`.
+        if state == .unknown { state = .ok }
         guard runStartedAt != nil else { return }
         if restartsThisRun > 0 {
             state = .recovered

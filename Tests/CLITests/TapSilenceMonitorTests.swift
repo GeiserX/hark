@@ -69,7 +69,9 @@ struct TapSilenceMonitorTests {
             clock.t += 1
             #expect(m.tick() == .none)
         }
-        #expect(m.status() == .init(state: .ok, silentFor: 0, restarts: 0))
+        // `unknown`, not `ok`: zeros from the first cycle are the missing-grant
+        // case, and nothing has measured audio to call it ok.
+        #expect(m.status() == .init(state: .unknown, silentFor: 0, restarts: 0))
 
         // One non-silent cycle arms it, and the zero run starts from there.
         m.observe(silent: false)
@@ -510,7 +512,9 @@ struct DeadTapRecoveryTests {
         feed(session, tapSilent: true, seconds: 5)
         #expect(session.probeCount == 0)
         #expect(session.restartCount == 0)
-        #expect(control.callAudio?.state == .ok)
+        // A client polling this to learn whether system audio is being captured
+        // must not be told `ok` by a tap that has never delivered a sample.
+        #expect(control.callAudio?.state == .unknown)
 
         control.stop()
         #expect(finished.wait(timeout: .now() + 5) == .success)
