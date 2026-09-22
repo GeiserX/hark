@@ -75,7 +75,26 @@ enum SentencePieceText {
 /// `finalized` is the watermark: every token before it is already written to the
 /// transcript, everything from it onward is the open line.
 struct StreamingLineCutter {
-    /// Silence between two tokens that closes a line (`--segment-pause`).
+    /// One encoder frame: the quantum of the token clock. Tokens are one frame
+    /// each and adjacent ones touch exactly, `end == start + encoderFrameSeconds`.
+    static let encoderFrameSeconds = 0.08
+
+    /// The floor under `--segment-pause`, one and a half encoder frames.
+    ///
+    /// One frame looks like the right floor and is not. FluidAudio times every
+    /// token at an exact multiple of 0.08, so two words with a single blank frame
+    /// between them are exactly one frame apart in real arithmetic, and in doubles
+    /// that gap lands either side of a 0.08 threshold depending only on how far
+    /// into the stream the words fall: on a one-frame floor, 788 of the first 2000
+    /// frame positions cut and the rest do not. With `--segment-pause 0` the line
+    /// broke at about two fifths of word boundaries, chosen by rounding rather
+    /// than by anything audible.
+    /// Halfway between one and two frames, no quantised gap can land on the
+    /// threshold: one blank frame never cuts, two always do.
+    static let minimumGapSeconds = 1.5 * encoderFrameSeconds
+
+    /// Silence between two tokens that closes a line (`--segment-pause`, clamped
+    /// up to `minimumGapSeconds`).
     let gapSeconds: Double
     /// Longest a single line may run before it is cut anyway (`--segment-window`).
     let maxLineSeconds: Double
@@ -83,7 +102,13 @@ struct StreamingLineCutter {
     private(set) var finalized = 0
 
     init(gapSeconds: Double, maxLineSeconds: Double) {
-        self.gapSeconds = gapSeconds
+        // `--segment-pause 0` is legal (`parseSegmentPause` allows 0 to 5) and the
+        // segmented path degrades gracefully at 0, cutting on the VAD instead.
+        // Here the comparison is against adjacent token timings, so 0 would put
+        // every single token on its own transcript line. Any pause that is an
+        // exact multiple of one frame has the same rounding problem, so the floor
+        // sits between two multiples.
+        self.gapSeconds = max(gapSeconds, Self.minimumGapSeconds)
         self.maxLineSeconds = maxLineSeconds
     }
 
