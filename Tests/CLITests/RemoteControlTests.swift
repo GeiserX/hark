@@ -440,6 +440,7 @@ struct SlowStartAnswerTests {
     /// 15 s) — including when `$HARK_START_TIMEOUT` moves the wait, which is the
     /// case a fixed ceiling gets wrong.
     @Test func theRequestCeilingClearsTheStartWait() {
+        unsetenv("HARK_START_TIMEOUT")   // the default, whatever the shell exports
         #expect(AgentTimeouts.startWait == 60)
         #expect(RemoteControlAgent.requestTimeout > AgentTimeouts.startWait)
 
