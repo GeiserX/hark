@@ -1001,20 +1001,21 @@ struct Hark: ParsableCommand {
         }
 
         Log.notice("diarizing the recording…")
-        var cueLists: [[TranscriptCue]] = []
+        var systemCues: [TranscriptCue] = []
+        var micCues: [TranscriptCue] = []
         if FileManager.default.fileExists(atPath: systemPath) {
-            cueLists.append(try BatchDiarization.diarizeToCues(
+            systemCues = try BatchDiarization.diarizeToCues(
                 audioPath: systemPath, engineName: settings.engine, modelFlag: model,
                 language: settings.language, translate: settings.translate,
-                maxSpeakers: maxSpeakers, threshold: speakerThreshold))
+                maxSpeakers: maxSpeakers, threshold: speakerThreshold)
         }
         if let labels, FileManager.default.fileExists(atPath: micPath) {
-            cueLists.append(try BatchDiarization.diarizeToCues(
+            micCues = try BatchDiarization.diarizeToCues(
                 audioPath: micPath, engineName: settings.engine, modelFlag: model,
                 language: settings.language, translate: settings.translate,
-                maxSpeakers: 1, threshold: speakerThreshold, relabel: labels.you))
+                maxSpeakers: 1, threshold: speakerThreshold, relabel: labels.you)
         }
-        let cues = BatchDiarization.merge(cueLists)
+        let cues = BatchDiarization.mergeTracks(mic: micCues, system: systemCues)
         let format = transcriptFormat(for: transcriptDest)
         let rendered = TranscriptFormatting.render(
             cues: cues, fullText: cues.map(\.text).joined(separator: " "), format: format)

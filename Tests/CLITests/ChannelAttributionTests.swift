@@ -428,6 +428,29 @@ struct CueMergeOrderTests {
         #expect(merged.map(\.text) == (mic + call).map(\.text))
     }
 
+    /// The offline-live path writes the same two tracks from a live capture, and
+    /// it used to append the call first, so one convention held on a file and the
+    /// opposite one on a recording. `mergeTracks` is now the only place that
+    /// decides, and it decides microphone first.
+    @Test func offlineLiveTracksComeOutMicrophoneFirst() {
+        let mic = cues("You", starts: Array(repeating: 4.0, count: 16))
+        let system = cues("Others", starts: Array(repeating: 4.0, count: 16))
+
+        let merged = BatchDiarization.mergeTracks(mic: mic, system: system)
+
+        #expect(merged.map(\.text) == (mic + system).map(\.text))
+    }
+
+    /// A capture without `--speakers` has no microphone track at all, so the
+    /// helper has to leave a single track exactly as it found it.
+    @Test func aMissingMicrophoneTrackLeavesTheCallUntouched() {
+        let system = cues("Others", starts: [0, 1, 2])
+
+        let merged = BatchDiarization.mergeTracks(mic: [], system: system)
+
+        #expect(merged.map(\.text) == system.map(\.text))
+    }
+
     /// The tiebreak must not disturb the ordering that matters: later audio
     /// still comes later, whichever track it arrived on.
     @Test func startTimeStillWins() {

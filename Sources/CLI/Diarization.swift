@@ -263,6 +263,14 @@ enum BatchDiarization {
             .map(\.cue)
     }
 
+    /// Merges the two tracks of an offline-live recording, microphone first, so
+    /// a cue that starts at the same instant on both tracks lands the same way
+    /// round as on an attributed file. The order the caller happens to diarize
+    /// the two files in is not the transcript's order; this is.
+    static func mergeTracks(mic: [TranscriptCue], system: [TranscriptCue]) -> [TranscriptCue] {
+        merge([mic, system])
+    }
+
     /// Writes 16 kHz mono Float samples to a temporary 16-bit WAV.
     private static func writeWav16kMono(_ samples: [Float]) throws -> URL {
         var data = Data(capacity: samples.count * 2)
