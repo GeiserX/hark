@@ -265,8 +265,19 @@ struct ChannelAttributionDispatchTests {
     }
 
     /// A quarter-second 440 Hz tone: enough to be a real audio file.
+    ///
+    /// Written as one expression with untyped literals, Swift 6.0.3 gives up on
+    /// this with "unable to type-check this expression in reasonable time" and
+    /// the whole test target fails to build. Naming each value with its type
+    /// leaves the checker nothing to infer. The samples are bit-identical.
     private func tone() -> [Float] {
-        (0..<4000).map { Float(sin(2 * .pi * 440 * Double($0) / 16000)) * 0.5 }
+        let sampleRate: Double = 16_000
+        let frequency: Double = 440
+        let twoPi: Double = 2 * Double.pi
+        return (0..<4000).map { (frame: Int) -> Float in
+            let value: Double = sin(twoPi * frequency * Double(frame) / sampleRate)
+            return Float(value) * 0.5
+        }
     }
 }
 
