@@ -168,6 +168,7 @@ system-only session omits it, and so does any session recorded with
 | `state` | meaning |
 | --- | --- |
 | `ok` | audio is arriving, or the run of zeros is still shorter than `$HARK_TAP_SILENCE_SECONDS` (10 s by default) |
+| `unknown` | nothing has been measured, so there is no verdict either way: the throwaway tap could not be built to judge a long run of zeros. Not the same as `silent` |
 | `silent` | the tap delivers zeros and a second, throwaway tap hears nothing either: nobody is talking |
 | `dead` | the throwaway tap hears audio the recording does not. The tap is being rebuilt, or a rebuild has not brought audio back yet |
 | `recovered` | audio came back after a rebuild. Stays until the next long silence is judged |

@@ -527,7 +527,9 @@ struct DeadTapRecoveryTests {
         feed(session, tapSilent: true, seconds: 4)
         #expect(session.probeCount >= 1)
         #expect(session.restartCount == 0)
-        #expect(control.callAudio?.state == .silent)
+        // Not `silent`: a probe that could not be built measured nothing, and
+        // `silent` on the wire means a measured quiet room.
+        #expect(control.callAudio?.state == .unknown)
 
         control.stop()
         #expect(finished.wait(timeout: .now() + 5) == .success)

@@ -128,8 +128,9 @@ everything after it sits that much earlier against the wall clock — the same
 as the restart above. If it hears nothing
 either, nothing happens, and it looks again at 30 s, 60 s, and then every
 minute until audio returns. At most five rebuilds are tried per silent stretch.
-A paused recording is never checked or rebuilt, and a check that cannot be set up
-is reported once on stderr and counts as hearing nothing.
+A paused recording is never checked or rebuilt. A check that cannot be set up is
+reported once on stderr and measures nothing, so it never rebuilds the tap and
+is not read as a quiet room either; `callAudio` says `unknown` for it.
 The remote-control agent reports this as `callAudio` in `GET /status`.
 
 Stopping is also bounded: if the audio stream can't be torn down (most often a

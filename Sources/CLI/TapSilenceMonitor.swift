@@ -29,6 +29,12 @@ import Foundation
 /// which is the stall watchdog's case, and this monitor stands aside.
 final class TapSilenceMonitor: @unchecked Sendable {
     enum State: String, Sendable {
+        /// Nothing has been measured: no verdict either way. Either the tap has
+        /// never delivered a single non-zero sample (the missing-grant case), or
+        /// the run of zeros was long enough to question but the throwaway tap
+        /// could not be built to answer it. Distinct from `silent`, which is a
+        /// measured quiet room, and from `ok`, which is measured audio.
+        case unknown
         /// Audio is flowing, or the zero run is still too short to question.
         case ok
         /// Zeros, and the last probe heard nothing either: a quiet room.
@@ -142,9 +148,11 @@ final class TapSilenceMonitor: @unchecked Sendable {
     }
 
     /// Ends a run that no audio ended (pause, stalled stream). Its `silent` or
-    /// `dead` verdict goes with it; `recovered` is history and stays.
+    /// `dead` verdict goes with it; `recovered` is history and stays, and so is
+    /// `unknown`, which is the absence of a verdict rather than one: dropping to
+    /// `ok` would claim audio nothing has measured.
     private func abandonRun() {
-        if state != .recovered { state = .ok }
+        if state != .recovered, state != .unknown { state = .ok }
         endRun()
     }
 
@@ -197,6 +205,21 @@ final class TapSilenceMonitor: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if lastSilentCycleAt != nil { lastSilentCycleAt = now() }
+    }
+
+    /// A probe asked for by `tick()` could not be built, so it says nothing
+    /// about the live tap. The zero run keeps ageing and the probe still counts
+    /// against the schedule, so a scope that can never be probed is retried at
+    /// the same widening interval rather than every tick. No rebuild follows: a
+    /// tap is only ever rebuilt on a probe that *heard* audio.
+    func probeCouldNotRun() {
+        lock.lock()
+        defer { lock.unlock() }
+        let probedRun = probingRunID
+        probingRunID = nil
+        guard probedRun == runID, runStartedAt != nil else { return }
+        probesDone += 1
+        state = .unknown
     }
 
     func probeFinished(heardAudio: Bool) {

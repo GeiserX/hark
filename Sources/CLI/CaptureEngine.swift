@@ -325,16 +325,25 @@ struct CaptureEngine {
                     probeQueue.async {
                         if stopping.get() == true { return }
                         let result = tapSession.probeTap(maxSeconds: 3)
+                        let silentFor = Int(tapMonitor.status().silentFor)
                         // A probe that can't be built says nothing about the live
-                        // tap: say so once, and treat it as quiet (no rebuild).
-                        if case .failed(let reason) = result, probeFailureLogged.get() != true {
-                            probeFailureLogged.set(true)
-                            Log.notice(
-                                "could not check the system audio tap (\(reason)); "
-                                    + "a dead tap would go unnoticed")
+                        // tap, so it is not a quiet room either: report it once
+                        // and leave the state saying nothing was measured.
+                        if case .failed(let reason) = result {
+                            if probeFailureLogged.get() != true {
+                                probeFailureLogged.set(true)
+                                Log.notice(
+                                    "could not check the system audio tap (\(reason)); "
+                                        + "a dead tap would go unnoticed")
+                            }
+                            Log.verbose(
+                                "tap check after \(silentFor) s of zeros: "
+                                    + "a fresh tap could not be built (\(reason))")
+                            tapMonitor.probeCouldNotRun()
+                            return
                         }
                         Log.verbose(
-                            "tap check after \(Int(tapMonitor.status().silentFor)) s of zeros: "
+                            "tap check after \(silentFor) s of zeros: "
                                 + "a fresh tap \(result == .heardAudio ? "hears audio" : "hears nothing")")
                         tapMonitor.probeFinished(heardAudio: result == .heardAudio)
                     }
