@@ -384,10 +384,24 @@ struct CaptureEngine {
         // Which step was still running is tracked so the timeout blames the
         // right thing: a slow rebuild or tap check is not a missing grant, and
         // saying so sends people to the wrong page.
+        //
+        // Every step draws from one deadline. Sequential bounds of
+        // `teardownTimeout` each would let the teardown run to a multiple of the
+        // limit whose name promises to be it, and past the agent's
+        // `$HARK_STOP_TIMEOUT` (`RemoteSession.failIfUnfinished`), which then
+        // marks a capture that finalized perfectly well as wedged — and keeps
+        // that verdict even once the worker reports a clean finish.
+        let teardownDeadline = Date().addingTimeInterval(teardownTimeout)
+        // 0 keeps its documented meaning of waiting indefinitely. Otherwise the
+        // remainder is floored above zero: `runBounded` reads 0 as "no limit",
+        // and a queue that is already idle needs only a moment.
+        let teardownBudget = {
+            teardownTimeout > 0 ? max(0.25, teardownDeadline.timeIntervalSinceNow) : 0
+        }
         let rebuildDrained = LockBox<Bool>()
         let checkDrained = LockBox<Bool>()
         let stopped = Self.runBounded(
-            teardownTimeout, label: "stopping the audio stream",
+            teardownBudget(), label: "stopping the audio stream",
             {
                 watchdogQueue.sync {}
                 rebuildDrained.set(true)
@@ -422,7 +436,7 @@ struct CaptureEngine {
                     """)
             }
         }
-        _ = Self.runBounded(teardownTimeout, label: "draining pending writes", { ioQueue.sync {} })
+        _ = Self.runBounded(teardownBudget(), label: "draining pending writes", { ioQueue.sync {} })
         for sink in sinks + sourceSinks.map(\.1) {
             do {
                 try sink.finalize()

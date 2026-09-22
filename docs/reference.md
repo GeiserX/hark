@@ -137,6 +137,13 @@ missing or stale **System Audio Recording** grant, which has been seen to block
 the Core Audio teardown indefinitely), hark reports it and finalizes the
 recording anyway so the audio captured so far stays playable — after
 `$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely).
+That is one budget for the whole teardown, not one per step: a tap rebuild or
+tap check still running is waited for first, in that order, and whatever is
+left of the budget goes to stopping the stream and draining pending writes. So
+a stop never overtakes a rebuild, and a slow teardown cannot overrun
+`$HARK_STOP_TIMEOUT` and have the agent call a finished capture wedged. The
+message names whichever step ran out of time, since a slow rebuild is not a
+permission problem.
 
 ## Working directory
 
