@@ -975,7 +975,7 @@ struct Hark: ParsableCommand {
 
     /// Whether `--live-streaming` has anything to do: it is on, and there is a
     /// transcript output for the closed lines to go into. `hark -o audio.opus`
-    /// with `live-streaming true` in the config must not pull a 612 MB model it
+    /// with `live-streaming true` in the config must not pull a 583 MB model it
     /// would never feed. Pure, for testing.
     static func streamingRequested(settings: ResolvedSettings, hasTranscript: Bool) -> Bool {
         settings.liveStreaming && hasTranscript

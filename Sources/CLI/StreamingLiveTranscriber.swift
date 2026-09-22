@@ -16,10 +16,11 @@ extension LiveTranscriber: LiveTranscriptionSink {}
 /// through a chunked recognizer and the growing token list is cut into transcript
 /// lines in hark.
 ///
-/// What the user sees: text about one chunk (2.24 s) behind the audio instead of
-/// 9 to 12 s, and an open line that grows in place until a pause closes it. The
-/// closed lines land in the same append-only `LiveTranscriptWriter` the segmented
-/// path uses, so the transcript file format does not change.
+/// What the user sees: text one chunk (560 ms) behind the decoder, about 2 s
+/// behind the audio end to end instead of 9 to 12 s, and an open line that grows
+/// in place until a pause closes it. The closed lines land in the same
+/// append-only `LiveTranscriptWriter` the segmented path uses, so the transcript
+/// file format does not change.
 ///
 /// Shape follows `VadSegmenter`: `write` runs on the capture I/O queue and only
 /// counts bytes and yields into an unbounded `AsyncStream`; one consumer `Task`

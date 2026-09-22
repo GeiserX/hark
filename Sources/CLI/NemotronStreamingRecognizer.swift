@@ -47,7 +47,7 @@ final class NemotronStreamingModels: @unchecked Sendable {
         if FluidAudioCache.isCached(bundle) {
             Log.verbose("loading streaming transcription model (\(bundle))")
         } else {
-            Log.notice("downloading the streaming transcription model (612 MB, first use)…")
+            Log.notice("downloading the streaming transcription model (583 MB, first use)…")
         }
         // "auto" is a prompt in the Latin metadata, but the *download* selector
         // routes "auto" to the full-vocab `multilingual/` ship. Ask for "en" so

@@ -501,7 +501,7 @@ struct StreamingSettingsTests {
     }
 
     /// Without a transcript output there is nothing to stream into, so the models
-    /// must not be loaded (a 612 MB download on first use) for an audio-only run
+    /// must not be loaded (a 583 MB download on first use) for an audio-only run
     /// that has `live-streaming true` in its config.
     @Test func streamsOnlyWhenATranscriptIsWritten() throws {
         let on = try resolve(["--live-streaming"])

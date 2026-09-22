@@ -12,7 +12,7 @@ import Testing
 /// languages, and the line timings land inside the windows the audio actually
 /// occupies.
 ///
-/// Gated: it downloads ~612 MB on first run and loads CoreML, so it is off in the
+/// Gated: it downloads ~583 MB on first run and loads CoreML, so it is off in the
 /// normal suite. Enable with `HARK_TEST_STREAMING=1` on Apple Silicon. SKIPs
 /// cleanly when a requested `say` voice is unavailable.
 ///
