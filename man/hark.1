@@ -427,7 +427,17 @@ config key (default
 a bare port or empty host binds loopback on that port; a non\-loopback bind
 requires
 .BR $HARK_REMOTE_TOKEN .
-Launch\-time capture flags become per\-session defaults. Run it as a background
+Launch\-time capture flags become per\-session defaults.
+.B POST /start
+answers once the capture is really open \(em with
+.B \-\-live\-streaming
+a cold recognizer model can hold that for tens of seconds \(em or after
+.B $HARK_START_TIMEOUT
+seconds, whichever comes first; the answer and
+.B GET /status
+both carry
+.B capturing
+so the client knows which of the two it got. Run it as a background
 LaunchAgent with
 .BR "brew services start hark" .
 See
@@ -527,6 +537,20 @@ Seconds to wait for the audio stream to stop before finalizing the recording
 anyway (default 5; 0 waits indefinitely). A capture that never had a working
 System Audio Recording grant can block the Core Audio teardown; the recording
 is still written.
+.TP
+.B HARK_START_TIMEOUT
+Seconds
+.B POST /start
+on the
+.B \-\-remote\-control
+agent waits for the capture to be open before answering anyway with
+.BR "capturing: false"
+(default 60). A first-ever model download can outlast any sensible wait; the
+capture keeps opening and
+.B GET /status
+shows
+.B capturing
+turning true.
 .TP
 .B HARK_STOP_TIMEOUT
 Seconds the

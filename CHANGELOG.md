@@ -32,6 +32,7 @@ All notable changes to Hark are documented here. The format is loosely based on
   `POST /start`. They set how soon a line appears in a live transcript; both the
   VAD and the amplitude (`--no-vad`) paths honour them. The pause must be 0–5 s,
   the window 1–60 s and greater than the pause. Defaults are unchanged.
+
 ### Changed
 - The minimum FluidAudio version is now 0.15.3, up from 0.12.4. The streaming
   recognizer needs `StreamingNemotronMultilingualAsrManager`, which 0.12.4 does
@@ -48,10 +49,14 @@ All notable changes to Hark are documented here. The format is loosely based on
   call after a reboot, and the opening of the call was simply missing from both
   the audio and the transcript. The answer now waits for the capture to be open, and
   a start that fails on the way up returns its own error instead of a `201` for a
-  recording that never happened. Both the start answer and `GET /status` carry
-  `capturing`, and the wait gives up at 60 s and answers with `capturing: false`
-  rather than holding a client forever on a first-ever model download.
-
+  recording that never happened. The answer carries `capturing`, and `GET /status`
+  gains a `capturing` key of its own — always present, whatever the session state
+  — so a client that was answered `capturing: false` polls for it to turn true.
+  The wait gives up after `$HARK_START_TIMEOUT` seconds (default 60) rather than
+  hold a client through a first-ever model download, and a `POST /stop` while it
+  is still waiting ends it. The HTTP server's own ceiling on a handler is raised
+  to clear that wait: at its default 15 s a cold start that answered at 22.8 s was
+  cut off with a `500` while the capture ran on.
 - A `--system --mix` recording no longer loses the system side silently. On a
   real 71-minute call the tap went to exact digital silence twice while the
   call kept playing and hark kept reporting `recording`: with the microphone
@@ -100,6 +105,8 @@ All notable changes to Hark are documented here. The format is loosely based on
   to attribute (mono, or more than two) is now a usage error naming the channel
   count, instead of being ignored. It used to produce a `Speaker 1/2…`
   transcript that looked labeled but told you nothing about who was who.
+
+### Fixed
 - Reading a stereo file threw away the right channel. Everything that folds a
   file down to mono — transcription, offline diarization, and a transcode to
   `--channels 1` — asked `AVAudioConverter` for the channel change, and it keeps

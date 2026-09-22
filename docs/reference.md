@@ -141,6 +141,15 @@ the budget expires hark stops that sink writing, so the transcript is complete a
 final the moment stop returns and a client reading it on the finished signal never
 sees it grow.
 
+Starting has its own bound. The remote-control agent's
+[`POST /start`](remote-control.md) answers once the capture is open — with
+`--live-streaming` a recognizer model that is not in memory yet can hold that for
+tens of seconds — or after `$HARK_START_TIMEOUT` seconds (default 60), whichever
+comes first. Both that answer and `GET /status` carry `capturing`: true once the
+sources are open, so anything said from then on is recorded. `state` says
+`recording` from the moment a start is accepted, which is earlier, so `capturing`
+is the one to trust.
+
 ## Working directory
 
 `-C, --directory PATH` resolves **relative** artifact paths (`-i`, `-a`, `-t`,
