@@ -1006,12 +1006,24 @@ struct Hark: ParsableCommand {
             let fromEnv = env[key.environmentName].map { !$0.isEmpty } ?? false
             if flag || fromEnv || configured { named.append(name) }
         }
+        // `--vad` and `--gain` are `.prefixedNo` flags, so the user may well have
+        // written `--no-vad` or `--no-gain`. Naming the positive spelling sends
+        // them looking through their own command line for a flag that is not
+        // there. Only a flag has a spelling; a value from `$HARK_*` or the config
+        // file is named by its setting.
+        func spelling(_ base: String, _ value: Bool?) -> String {
+            value == false ? "--no-" + base.dropFirst(2) : base
+        }
         check("--engine", .engine, flag: a.engine != nil, configured: config.engine != nil)
-        check("--vad", .vad, flag: a.useVad != nil, configured: config.vad != nil)
+        check(
+            spelling("--vad", a.useVad), .vad, flag: a.useVad != nil,
+            configured: config.vad != nil)
         check(
             "--vad-threshold", .vadThreshold, flag: a.vadThreshold != nil,
             configured: config.vadThreshold != nil)
-        check("--gain", .gain, flag: a.useGain != nil, configured: config.gain != nil)
+        check(
+            spelling("--gain", a.useGain), .gain, flag: a.useGain != nil,
+            configured: config.gain != nil)
         return named
     }
 

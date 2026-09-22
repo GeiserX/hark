@@ -701,7 +701,17 @@ struct StreamingSettingsTests {
         #expect(
             try ignored(["--live-streaming"], config: Configuration(engine: "parakeet"))
                 == ["--engine"])
-        #expect(try ignored(["--live-streaming", "--no-gain"]) == ["--gain"])
+        // Named the way the user wrote it: `--no-gain` is not `--gain`, and being
+        // told hark ignores a flag you never typed sends you hunting for it.
+        #expect(try ignored(["--live-streaming", "--no-gain"]) == ["--no-gain"])
+        #expect(try ignored(["--live-streaming", "--gain"]) == ["--gain"])
+        #expect(try ignored(["--live-streaming", "--no-vad"]) == ["--no-vad"])
+        #expect(try ignored(["--live-streaming", "--vad"]) == ["--vad"])
+        // Only a flag has a spelling. A value from the environment or the config
+        // file is named by its setting, positive form.
+        #expect(try ignored(["--live-streaming"], env: ["HARK_GAIN": "0"]) == ["--gain"])
+        #expect(
+            try ignored(["--live-streaming"], config: Configuration(gain: false)) == ["--gain"])
         // Not ignored: the same live run hands --silence-threshold to
         // makeAudioSink, where it decides every --split silence:<n> boundary.
         // Naming it would tell the user their split threshold does not apply
