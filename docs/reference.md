@@ -190,7 +190,9 @@ the streaming path ignores `-e/--engine`, `--vad`, `--vad-threshold` and `--gain
 Only `--segment-pause` and `--segment-window` still shape the lines.
 `--silence-threshold` is not in that list: streaming does not segment on it, but
 the same run still uses it for `--split silence:<n>`. hark names the ones you set
-yourself, by flag, environment or config, when streaming starts. A configured `engine: parakeet` never turns into the
+yourself, by flag, environment or config, when streaming starts. That notice goes
+to hark's standard error, so it reaches you in a terminal but not through the
+[remote-control API](remote-control.md), which has no field for it. A configured `engine: parakeet` never turns into the
 streaming model unannounced.
 
 A pause (interactive space, or [`POST /pause`](remote-control.md)) drops the

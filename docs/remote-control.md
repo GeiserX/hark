@@ -250,6 +250,13 @@ replace, or `"error"` to get a `409` instead. `"ask"` is rejected (`400`).
 | `segmentPause` / `segmentWindow` | number | `--segment-pause` / `--segment-window` (live segment timing, seconds) |
 | `liveStreaming` | bool | `--live-streaming` (stream partial text instead of one line per pause) |
 
+With `liveStreaming` on, the streaming recognizer decodes every chunk and segments
+on its own, so `engine`, `vad`, `vadThreshold` and `gain` in the same request do
+not apply. The agent names the ones you set on its own standard error, not in the
+response or in [`GET /status`](#get-status), so a client that wants to know it sent
+an ignored field has to check it before sending. `silenceThreshold` is unaffected:
+streaming does not segment on it, but the same run still uses it for `split`.
+
 ### `POST /pause`, `/resume`, `/mute`, `/unmute`, `/stop`
 
 ```sh
