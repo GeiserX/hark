@@ -69,14 +69,23 @@ struct SayStreamingTests {
     /// Feeds samples through a real `StreamingLiveTranscriber` in 0.25 s slices of
     /// 16 kHz mono 16-bit PCM (the identity-resampler path) and returns the
     /// transcript lines plus the mean wall time per recognizer chunk.
+    ///
+    /// Synchronous, and it finalizes the sink the way `CaptureEngine` does rather
+    /// than through the async variant, so what this measures is the shipping path.
+    /// Callers hand it to `offCooperativePool`, because blocking a cooperative
+    /// worker in `finalize()` starves the consumer `Task` it waits for.
     private func transcribe(
         _ samples: [Float], recognizer: StreamingRecognizer, path: String
-    ) async throws -> (lines: [(start: Double, end: Double, text: String)], msPerChunk: Double) {
+    ) throws -> (lines: [(start: Double, end: Double, text: String)], msPerChunk: Double) {
         let writer = try LiveTranscriptWriter(destination: .file(path), format: .json)
         let sink = StreamingLiveTranscriber(
             recognizer: recognizer, writer: writer, ownsWriter: true, speaker: nil,
             resolver: nil, captureFormat: captureFormat, control: nil, sourceKey: "single",
-            gapSeconds: 0.7, maxLineSeconds: 12, labelName: "say test")
+            gapSeconds: 0.7, maxLineSeconds: 12, labelName: "say test",
+            // A real call's decode is faster than real time, but a first run that
+            // is also warming CoreML is not; no bound here, the test's own
+            // real-time assertions are what catch a slow decoder.
+            finalizeTimeout: 0)
         let sliceSamples = 4000
         let started = ContinuousClock.now
         var offset = 0
@@ -85,7 +94,7 @@ struct SayStreamingTests {
             try sink.write(VadSegmenter.packInt16(samples[offset..<end]))
             offset = end
         }
-        await sink.finalizeAsync()
+        try sink.finalize()
         let elapsed = ContinuousClock.now - started
         let seconds = Double(samples.count) / 16000
         let chunks = max(1.0, seconds / (Double(NemotronStreamingModels.chunkMs) / 1000))
@@ -126,7 +135,11 @@ struct SayStreamingTests {
             ])
         else { return }  // a voice is missing on this machine
 
-        let models = try NemotronStreamingModels.load(language: nil)
+        // `load`, `makeRecognizer` and `finalize` all block their calling thread
+        // while awaiting the concurrency pool, so they run on a real thread.
+        let models = try await offCooperativePool {
+            try NemotronStreamingModels.load(language: nil)
+        }
         // The Latin-script ship must be what landed; "auto" on the download
         // selector would have fetched the 665 MB full-vocab model instead.
         #expect(FluidAudioCache.isCached(NemotronStreamingModels.bundle))
@@ -139,8 +152,10 @@ struct SayStreamingTests {
         let path = FileManager.default.temporaryDirectory
             .appendingPathComponent("hark-say-stream-\(UUID().uuidString).json").path
         defer { try? FileManager.default.removeItem(atPath: path) }
-        let result = try await transcribe(
-            call.samples, recognizer: try models.makeRecognizer(), path: path)
+        let result = try await offCooperativePool {
+            try self.transcribe(
+                call.samples, recognizer: try models.makeRecognizer(), path: path)
+        }
 
         print("streaming: \(String(format: "%.0f", result.msPerChunk)) ms per \(NemotronStreamingModels.chunkMs) ms chunk")
         for line in result.lines {
@@ -178,9 +193,10 @@ struct SayStreamingTests {
             ])
         else { return }
 
-        let models = try NemotronStreamingModels.load(language: nil)
-        let first = try models.makeRecognizer()
-        let second = try models.makeRecognizer()
+        let (models, first, second) = try await offCooperativePool {
+            let models = try NemotronStreamingModels.load(language: nil)
+            return (models, try models.makeRecognizer(), try models.makeRecognizer())
+        }
         let pathA = FileManager.default.temporaryDirectory
             .appendingPathComponent("hark-say-stream-a-\(UUID().uuidString).json").path
         let pathB = FileManager.default.temporaryDirectory
@@ -190,8 +206,14 @@ struct SayStreamingTests {
             try? FileManager.default.removeItem(atPath: pathB)
         }
 
-        async let runA = transcribe(call.samples, recognizer: first, path: pathA)
-        async let runB = transcribe(call.samples, recognizer: second, path: pathB)
+        // Both on their own thread, genuinely at the same time: two recognizers
+        // sharing one model set is what a --mix capture runs.
+        async let runA = offCooperativePool {
+            try self.transcribe(call.samples, recognizer: first, path: pathA)
+        }
+        async let runB = offCooperativePool {
+            try self.transcribe(call.samples, recognizer: second, path: pathB)
+        }
         let (resultA, resultB) = try await (runA, runB)
 
         print(
