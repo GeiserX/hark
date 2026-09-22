@@ -546,9 +546,17 @@ struct StreamingSettingsTests {
         #expect(
             try ignored(["--live-streaming"], config: Configuration(engine: "parakeet"))
                 == ["--engine"])
+        #expect(try ignored(["--live-streaming", "--no-gain"]) == ["--gain"])
+        // Not ignored: the same live run hands --silence-threshold to
+        // makeAudioSink, where it decides every --split silence:<n> boundary.
+        // Naming it would tell the user their split threshold does not apply
+        // while it is the only thing setting it.
+        #expect(try ignored(["--live-streaming", "--silence-threshold=-40"]) == [])
         #expect(
-            try ignored(["--live-streaming", "--no-gain", "--silence-threshold=-40"])
-                == ["--gain", "--silence-threshold"])
+            try ignored(["--live-streaming"], env: ["HARK_SILENCE_THRESHOLD": "-40"]) == [])
+        #expect(
+            try ignored(["--live-streaming"], config: Configuration(silenceThreshold: -40))
+                == [])
     }
 
     /// A file is transcribed in one pass, so the flag has nothing to stream.

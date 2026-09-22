@@ -183,10 +183,11 @@ before. The open line is written nowhere, and with `--remote-control` the agent
 serves it as `session.partial` on [`GET /status`](remote-control.md).
 
 The recognizer decodes every chunk and cuts lines out of its own token stream, so
-the streaming path ignores `-e/--engine`, `--vad`, `--vad-threshold`, `--gain` and
-`--silence-threshold`. Only `--segment-pause` and `--segment-window` still shape
-the lines. hark names the ones you set yourself, by flag, environment or config,
-when streaming starts. A configured `engine: parakeet` never turns into the
+the streaming path ignores `-e/--engine`, `--vad`, `--vad-threshold` and `--gain`.
+Only `--segment-pause` and `--segment-window` still shape the lines.
+`--silence-threshold` is not in that list: streaming does not segment on it, but
+the same run still uses it for `--split silence:<n>`. hark names the ones you set
+yourself, by flag, environment or config, when streaming starts. A configured `engine: parakeet` never turns into the
 streaming model unannounced.
 
 A pause (interactive space, or [`POST /pause`](remote-control.md)) drops the

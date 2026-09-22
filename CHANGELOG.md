@@ -19,8 +19,7 @@ All notable changes to Hark are documented here. The format is loosely based on
   Spanish, French, Italian, Portuguese and German in one model (583 MB on first
   use, pre-fetch with `hark models download fluidaudio:streaming-asr`). It picks
   its own recognizer and does its own segmenting, so `-e/--engine`, `--vad`,
-  `--vad-threshold`, `--gain` and `--silence-threshold` do not apply; hark names
-  the ones you set. It cannot translate, `--diarize-engine offline` ignores it,
+  `--vad-threshold` and `--gain` do not apply; hark names the ones you set. It cannot translate, `--diarize-engine offline` ignores it,
   and pairing it with `-i FILE` is a usage error. Off by default: where it cannot
   run, hark prints why and the segmented path runs unchanged, so no recording
   depends on it.

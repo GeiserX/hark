@@ -984,12 +984,18 @@ struct Hark: ParsableCommand {
     /// The settings the streaming path cannot honour, named as the user set them,
     /// and only those that were set deliberately (flag, `$HARK_*`, or config).
     ///
-    /// Streaming builds its sinks from `--segment-pause`/`--segment-window` only.
-    /// The recognizer is the Nemotron streaming model whatever `--engine` says,
-    /// and its encoder consumes every chunk, so nothing consults the VAD, the gain
-    /// normalizer or the amplitude threshold. Silence about that is how someone
-    /// with `engine: parakeet` in their config ends up transcribing with something
-    /// else and never hears of it. Pure, for testing.
+    /// Streaming builds its transcript lines from `--segment-pause`/`--segment-window`
+    /// only. The recognizer is the Nemotron streaming model whatever `--engine`
+    /// says, and its encoder consumes every chunk, so nothing consults the VAD or
+    /// the gain normalizer. Silence about that is how someone with
+    /// `engine: parakeet` in their config ends up transcribing with something else
+    /// and never hears of it.
+    ///
+    /// `--silence-threshold` is deliberately absent. Streaming does not segment on
+    /// it, but the same live run still hands it to `makeAudioSink`, where it sets
+    /// every boundary for `--split silence:<n>`. Naming it would tell a user their
+    /// split threshold was ignored while it was deciding where each file ended.
+    /// Pure, for testing.
     static func streamingIgnoredSettings(
         from a: Hark,
         environment env: [String: String] = ProcessInfo.processInfo.environment,
@@ -1006,9 +1012,6 @@ struct Hark: ParsableCommand {
             "--vad-threshold", .vadThreshold, flag: a.vadThreshold != nil,
             configured: config.vadThreshold != nil)
         check("--gain", .gain, flag: a.useGain != nil, configured: config.gain != nil)
-        check(
-            "--silence-threshold", .silenceThreshold, flag: a.silenceThreshold != nil,
-            configured: config.silenceThreshold != nil)
         return named
     }
 
