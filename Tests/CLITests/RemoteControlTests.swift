@@ -453,9 +453,17 @@ struct SlowStartAnswerTests {
     /// The mechanism itself, so the ceiling is never mistaken for a courtesy:
     /// the same handler is cut off with a 500 under a short timeout and answers
     /// under a long one.
+    ///
+    /// The generous timeout is minutes rather than seconds on purpose. The
+    /// handler sleeps 0.4 s, but this whole suite shares a process with tests
+    /// that block the cooperative pool for tens of seconds at a stretch, and the
+    /// server's timeout is wall clock: at 5 s this failed in the full suite while
+    /// passing every time on its own. The assertion is unchanged, since a ceiling
+    /// that cut the handler off regardless of its timeout would still answer 500
+    /// here, whatever the number.
     @Test func aHandlerSlowerThanTheServerTimeoutIsCutOff() async throws {
         #expect(try await answer(afterHandlerSeconds: 0.4, serverTimeout: 0.1) == 500)
-        #expect(try await answer(afterHandlerSeconds: 0.4, serverTimeout: 5) == 200)
+        #expect(try await answer(afterHandlerSeconds: 0.4, serverTimeout: 120) == 200)
     }
 
     private func answer(afterHandlerSeconds delay: Double, serverTimeout: TimeInterval) async throws -> Int {
