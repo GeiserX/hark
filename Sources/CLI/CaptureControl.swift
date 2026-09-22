@@ -65,6 +65,28 @@ final class CaptureControl: @unchecked Sendable {
         return capturing
     }
 
+    /// The same wait for the agent's request handler, which runs on Swift
+    /// concurrency: polling keeps the cooperative thread free instead of parking
+    /// it on the condition for up to a minute.
+    func waitUntilCapturing(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            let (capturing, ended) = snapshotGate()
+            // A stop while the answer is still waiting ends the wait. The engine
+            // installs its stop handler only once the sources are up, so the open
+            // runs to completion regardless; without this the start would answer
+            // `201` with `capturing: true` after the client's own `/stop` had
+            // already been answered `200`.
+            if capturing || ended || isStopped || Date() >= deadline { return capturing }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func snapshotGate() -> (capturing: Bool, runEnded: Bool) {
+        gate.lock(); defer { gate.unlock() }
+        return (capturing, runEnded)
+    }
+
     /// True while capture is paused (the I/O path drops chunks).
     var isPaused: Bool {
         lock.lock(); defer { lock.unlock() }

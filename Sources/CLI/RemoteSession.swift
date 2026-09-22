@@ -12,6 +12,14 @@ enum AgentError: Error {
 
 /// Agent timing knobs.
 enum AgentTimeouts {
+    /// How long `POST /start` waits for the capture to be running before it
+    /// answers anyway with `capturing: false`. A first-ever model download can
+    /// outlast any sensible wait, and the client can watch `GET /status` for it.
+    /// Which model is cold decides what is long enough, hence the override.
+    static var startWait: TimeInterval {
+        ProcessInfo.processInfo.environment["HARK_START_TIMEOUT"].flatMap(Double.init) ?? 60
+    }
+
     /// How long after a stop request the worker gets to finish before the
     /// session is declared wedged. A capture that can't reach the audio stream
     /// (e.g. a stale "System Audio Recording" grant) has been seen to block

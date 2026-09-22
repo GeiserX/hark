@@ -133,7 +133,8 @@ curl -s http://127.0.0.1:8473/status
   "agent": { "version": "0.1.0", "address": "127.0.0.1:8473" },
   "session": {
     "id": "28D1DBD7-…",
-    "state": "recording", "capturing": true,
+    "state": "recording",
+    "capturing": true,
     "muted": false,
     "elapsed": 12.4,
     "audio": "meeting.m4a",
@@ -195,8 +196,7 @@ curl -s -X POST http://127.0.0.1:8473/start \
 ```
 
 ```json
-{ "id": "28D1DBD7-…", "state": "recording", "muted": false, "audio": "meeting.m4a", "transcript": "meeting.srt",
-  "capturing": true }
+{ "id": "28D1DBD7-…", "state": "recording", "capturing": true, "muted": false, "audio": "meeting.m4a", "transcript": "meeting.srt" }
 ```
 
 Relative paths resolve under the agent's working directory (`-C` at launch).
@@ -207,8 +207,12 @@ more: 12.7 s was measured on the first streamed call after a reboot. The answer
 comes once the capture is open, so a client that starts talking the moment it sees
 the `201` is heard from its first word. A start that fails on the way up returns its own error
 instead of a `201` for a recording that never happened. The wait gives up after
-60 s and answers anyway with `capturing: false`, which a first-ever model download
-can reach; watch `capturing` in `GET /status` for it to turn true.
+`$HARK_START_TIMEOUT` seconds (default 60) and answers anyway with
+`capturing: false`, which a first-ever model download can reach; watch `capturing`
+in `GET /status` for it to turn true. A `POST /stop` while the answer is still
+waiting also ends the wait. Give the request a client timeout past that wait: the
+agent's HTTP server allows a handler the wait plus 15 s, and a client that gives up
+sooner reports a failure for a capture that is running.
 
 **Existing files.** The agent can't ask, so it defaults to `ifExists: "unique"`:
 if `meeting.m4a` is already there, the session records `meeting-1.m4a` (and
@@ -274,13 +278,14 @@ audio keeps recording); it is independent of pause and idempotent.
 | Code | When |
 |------|------|
 | `200` | status / pause / resume / mute / unmute / stop |
-| `201` | start accepted |
+| `201` | recording started: the capture is open, or the start wait ran out and the body says `capturing: false` |
 | `400` | invalid JSON or invalid parameters (bad combo, stdout output) |
 | `401` | missing/incorrect bearer token |
 | `403` | permission denied (microphone / system audio) |
 | `404` | control verb with no active recording; input not found |
 | `409` | a recording is already active, the previous capture is still finishing, or an output exists and `ifExists: "error"` was requested |
 | `422` | unusable engine/model; or `mute`/`unmute` on a capture with no microphone |
+| `500` | an internal error, or a handler that outlived the HTTP server's own ceiling (the start wait plus 15 s). The `500` from the ceiling has no JSON body, and whatever the handler started keeps running |
 
 Errors carry a JSON body `{ "error": "…" }`.
 
