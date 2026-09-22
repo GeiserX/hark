@@ -36,7 +36,7 @@ enum TapLevel {
     /// About -90 dBFS: below any real signal, above denormal noise.
     static let silencePeak: Float32 = 3.2e-5
 
-    /// True when `asbd` is the packed 32-bit float layout `isSilent` reads. A tap
+    /// True when `asbd` is the 32-bit float linear-PCM layout `isSilent` reads. A tap
     /// stream in any other format would make the silence verdict meaningless in
     /// both directions — a false "non-silent" leaves a dead tap unnoticed, a
     /// false "silent" rebuilds a healthy tap and puts a real gap in the
