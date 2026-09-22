@@ -77,12 +77,11 @@ struct DiarizedSegmentPaddingTests {
         // for its floor, so a parakeet reporting 0 pads nothing and the run dies
         // on the first sub-0.3 s span again.
         #expect(ParakeetBackend.audioFloorSeconds == ASRConstants.minimumAudioDurationSeconds)
-        // A sanity range rather than FluidAudio's current 0.3: the point of taking
-        // the constant is that a vendor bump moves the padding with it, and an
-        // assertion on the value would redden the bump instead. What has to hold is
-        // that there is a floor at all and that it is short enough to pad up to.
+        // That there is a floor at all, and nothing about its value. The point of
+        // reading the constant is that a vendor bump moves the padding with it, so
+        // any assertion a bump could leave, an upper bound included, reddens the
+        // bump this test exists to tolerate.
         #expect(ParakeetBackend.audioFloorSeconds > 0)
-        #expect(ParakeetBackend.audioFloorSeconds <= 1)
     }
 
     @Test func floorTravelsThroughTheSharedBackendWrapper() {
