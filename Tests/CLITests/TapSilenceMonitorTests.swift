@@ -13,9 +13,14 @@ struct TapSilenceMonitorTests {
         var now: @Sendable () -> Date { { [self] in t } }
     }
 
+    /// A monitor whose tap has already delivered audio once, which is what arms
+    /// it: a tap that has never been heard is never judged. The test about that
+    /// gate builds its monitor directly instead.
     private func monitor(_ clock: Clock, maxRestarts: Int = 5) -> TapSilenceMonitor {
-        TapSilenceMonitor(
+        let monitor = TapSilenceMonitor(
             silenceSeconds: 10, confirmSeconds: 0.5, maxRestarts: maxRestarts, now: clock.now)
+        monitor.observe(silent: false)
+        return monitor
     }
 
     /// `seconds` of zeros, one silent cycle per second (cycles keep arriving).
@@ -47,6 +52,31 @@ struct TapSilenceMonitorTests {
             }
         }
         return (probes, restarts, gaveUp)
+    }
+
+    /// The missing "System Audio Recording" grant: the tap delivers zeros from
+    /// its very first cycle while the mic keeps the buffers coming. A tap that
+    /// was never alive is not a tap that died — judging it would build and tear
+    /// down a probe tap every minute for the whole recording, on exactly the
+    /// path where that teardown has been seen to wedge. So one non-silent cycle
+    /// has to arrive before any zero run counts.
+    @Test func aTapThatNeverDeliveredAudioIsNeverJudged() {
+        let clock = Clock()
+        let m = TapSilenceMonitor(
+            silenceSeconds: 10, confirmSeconds: 0.5, maxRestarts: 5, now: clock.now)
+        for _ in 0..<300 {
+            m.observe(silent: true)
+            clock.t += 1
+            #expect(m.tick() == .none)
+        }
+        #expect(m.status() == .init(state: .ok, silentFor: 0, restarts: 0))
+
+        // One non-silent cycle arms it, and the zero run starts from there.
+        m.observe(silent: false)
+        zeros(m, clock, seconds: 9)
+        #expect(m.tick() == .none)
+        zeros(m, clock, seconds: 1)
+        #expect(m.tick() == .probe)
     }
 
     @Test func shortZeroRunsNeverProbe() {
@@ -393,6 +423,23 @@ struct DeadTapRecoveryTests {
         #expect(finished.wait(timeout: .now() + 5) == .success)
     }
 
+    /// The missing-grant case end to end: the tap is silent from its first cycle,
+    /// so the engine never builds a probe tap for it, however long it runs.
+    @Test func aTapSilentFromTheFirstCycleIsNeverProbed() {
+        let control = CaptureControl()
+        let session = TapStubSession()
+        session.setProbeResult(.heardAudio)
+        let finished = start(session, control)
+
+        feed(session, tapSilent: true, seconds: 5)
+        #expect(session.probeCount == 0)
+        #expect(session.restartCount == 0)
+        #expect(control.callAudio?.state == .ok)
+
+        control.stop()
+        #expect(finished.wait(timeout: .now() + 5) == .success)
+    }
+
     /// A probe that can't be built is not evidence of anything: no rebuild.
     @Test func failedProbeNeverRebuilds() {
         let control = CaptureControl()
@@ -400,6 +447,7 @@ struct DeadTapRecoveryTests {
         session.setProbeResult(.failed("no tap"))
         let finished = start(session, control)
 
+        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
         feed(session, tapSilent: true, seconds: 4)
         #expect(session.probeCount >= 1)
         #expect(session.restartCount == 0)
@@ -445,6 +493,7 @@ struct DeadTapRecoveryTests {
         session.setProbeResult(.heardAudio)
         let finished = start(session, control, stallSeconds: 0.5, tapSilenceSeconds: 4)
 
+        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
         feed(session, tapSilent: true, seconds: 0.3)
         usleep(5_000_000)  // no cycles at all; stall retries every 3 s
         #expect(session.restartCount >= 1)  // the stall watchdog's
@@ -470,6 +519,7 @@ struct DeadTapRecoveryTests {
         session.setRestartSeconds(3.0)
         let finished = start(session, control)
 
+        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
         let deadline = Date().addingTimeInterval(15)
         while !session.isRestarting, Date() < deadline { session.cycle(tapSilent: true); usleep(20_000) }
         #expect(session.isRestarting)
@@ -492,6 +542,7 @@ struct DeadTapRecoveryTests {
         session.setProbeResult(.silent)
         let finished = start(session, control)
 
+        feed(session, tapSilent: false, seconds: 0.3)  // the tap was alive first
         feed(session, tapSilent: true, seconds: 4)
         #expect(session.probeCount >= 1)
         #expect(session.restartCount == 0)

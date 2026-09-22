@@ -17,6 +17,9 @@ import Foundation
 ///   * `tick()` on a fixed cadence; act on the returned `Action`.
 ///   * `probeFinished(heardAudio:)` when a probe asked for by `tick()` ends.
 ///
+/// The monitor only judges a tap that has been heard at least once: zeros from
+/// the first cycle are the missing-permission case, not a tap that died.
+///
 /// Probes run when the zero run reaches `silenceSeconds`, then 3x, 6x, and
 /// every further 6x of it (10 s, 30 s, 60 s, then each minute). Restarts ride
 /// the same schedule, so a restart that does not bring audio back is retried
@@ -61,6 +64,13 @@ final class TapSilenceMonitor: @unchecked Sendable {
     private let now: () -> Date
     private let lock = NSLock()
 
+    /// A tap that has never delivered audio is never judged: with no (or a
+    /// stale) "System Audio Recording" grant the tap stream is zeros from the
+    /// first cycle while the mic keeps them coming, and that is not a tap that
+    /// *died* — probing it would tear a tap down every minute on the one path
+    /// where that teardown has been seen to block. Same gate, same reason, as
+    /// `StallWatchdog.sawAudio`.
+    private var sawAudio = false
     private var state = State.ok
     private var restarts = 0
     private var runStartedAt: Date?
@@ -103,11 +113,13 @@ final class TapSilenceMonitor: @unchecked Sendable {
         defer { lock.unlock() }
         guard !paused else { return }
         if silent {
+            guard sawAudio else { return }
             let t = now()
             if runStartedAt == nil { runStartedAt = t }
             lastSilentCycleAt = t
             return
         }
+        sawAudio = true
         guard runStartedAt != nil else { return }
         if restartsThisRun > 0 {
             state = .recovered
