@@ -405,12 +405,14 @@ struct CapturingGateTests {
             captureSystem: false, apps: [], excludeApps: [], mix: false)
         engine.control = control
 
+        let finished = DispatchSemaphore(value: 0)
         let box = UncheckedSendableBox(value: (engine, session, CollectingSink()))
         Thread.detachNewThread {
             let (engine, session, sink) = box.value
             try? engine.run(
                 session: session, format: format, into: [sink],
                 duration: nil, warnOnSilence: false)
+            finished.signal()
         }
         #expect(session.entered.wait(timeout: .now() + 5) == .success)
         #expect(control.isCapturing == false)
@@ -420,6 +422,7 @@ struct CapturingGateTests {
         #expect(control.waitUntilCapturing(timeout: 5) == true)
         #expect(control.isCapturing == true)
         control.stop()
+        #expect(finished.wait(timeout: .now() + 5) == .success)       // sinks finalized in-test
     }
 
     /// A start that fails on the way up must release the waiter instead of
@@ -432,6 +435,7 @@ struct CapturingGateTests {
             captureSystem: false, apps: [], excludeApps: [], mix: false)
         engine.control = control
 
+        let finished = DispatchSemaphore(value: 0)
         let box = UncheckedSendableBox(value: (engine, FailingSession(), CollectingSink()))
         Thread.detachNewThread {
             let (engine, session, sink) = box.value
@@ -439,9 +443,13 @@ struct CapturingGateTests {
                 session: session, format: format, into: [sink],
                 duration: nil, warnOnSilence: false)
             control.markRunEnded()          // what the agent's handler does
+            finished.signal()
         }
+        let started = Date()
         #expect(control.waitUntilCapturing(timeout: 5) == false)
+        #expect(Date().timeIntervalSince(started) < 2)   // released by the run ending, not by the timeout
         #expect(control.isCapturing == false)
+        #expect(finished.wait(timeout: .now() + 5) == .success)
     }
 
     /// A pause does not close the sources, so the gate stays open.
