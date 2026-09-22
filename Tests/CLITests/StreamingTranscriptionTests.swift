@@ -86,6 +86,38 @@ private final class StalledStreamingRecognizer: StreamingRecognizer, @unchecked 
     func finish() async throws -> [RecognizedToken] { [] }
 }
 
+/// A decoder that parks inside `process` until the test releases it, then answers
+/// with one word. Models the real failure: `finalize()` gives up, the caller
+/// reports the session finished, and only then does CoreML come back with words.
+/// The park is a continuation resumed from another thread, so `Task.cancel()` does
+/// not break it, exactly like a CoreML call that does not check for cancellation.
+private final class ReleasableStreamingRecognizer: StreamingRecognizer, @unchecked Sendable {
+    let chunkSamples = 4000
+    private let gate = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var parked = false
+    private var returned = false
+
+    var hasParked: Bool { lock.withLock { parked } }
+    var hasReturned: Bool { lock.withLock { returned } }
+
+    func release() { gate.signal() }
+
+    func process(_ samples: [Float]) async throws -> [RecognizedToken] {
+        lock.withLock { parked = true }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                self.gate.wait()
+                continuation.resume()
+            }
+        }
+        lock.withLock { returned = true }
+        return [token("\u{2581}late", 0.0)]
+    }
+
+    func finish() async throws -> [RecognizedToken] { [token("\u{2581}late", 0.0)] }
+}
+
 /// Holds a sink weakly so a test can watch it be deallocated. ARC's side table
 /// makes the weak read safe from the polling closure; the box itself is never
 /// mutated after the sink is dropped.
@@ -386,10 +418,16 @@ struct StreamingTranscriptionTests {
                 (0.5, token("\u{2581}flush", 0.08)),
             ])
         let writer = try LiveTranscriptWriter(destination: .file(path), format: .json)
+        // `finalizeTimeout: 0` waits for the decoder however long it takes. The
+        // default inherits `$HARK_TEARDOWN_TIMEOUT` (5 s), and this test is about
+        // the tail landing, not about the bound: under a full suite on a
+        // single-wide cooperative pool the scripted decode can miss a 5 s wall
+        // clock, and a timed-out finalize deliberately drops the tail, so the test
+        // would fail for a reason it is not testing.
         let sink = StreamingLiveTranscriber(
             recognizer: recognizer, writer: writer, ownsWriter: true, speaker: "You",
             resolver: nil, captureFormat: captureFormat, control: nil, sourceKey: "mic",
-            gapSeconds: 0.7, maxLineSeconds: 12, labelName: "test")
+            gapSeconds: 0.7, maxLineSeconds: 12, labelName: "test", finalizeTimeout: 0)
         let chunk = silence(0.25)
         try await offCooperativePool {
             try sink.write(chunk)
@@ -434,22 +472,85 @@ struct StreamingTranscriptionTests {
     @Test func finalizeGivesUpOnADecoderThatNeverAnswers() async throws {
         let path = tempTranscriptPath()
         defer { try? FileManager.default.removeItem(atPath: path) }
+        let released = WeakSinkBox()
+        // The sink exists only inside here, so the weak check afterwards is a real
+        // one rather than a read through a binding still in scope.
+        func stopADecoderThatNeverAnswers() async throws -> Duration {
+            let writer = try LiveTranscriptWriter(destination: .file(path), format: .json)
+            let sink = StreamingLiveTranscriber(
+                recognizer: StalledStreamingRecognizer(), writer: writer, ownsWriter: true,
+                speaker: nil, resolver: nil, captureFormat: captureFormat, control: nil,
+                sourceKey: "single", gapSeconds: 0.7, maxLineSeconds: 12, labelName: "test",
+                finalizeTimeout: 1)
+            released.sink = sink
+            let chunk = silence(0.25)
+            // A real thread, so the decoder genuinely gets to run and hang: the
+            // only reason `finalize()` comes back is the bound.
+            return try await offCooperativePool { () -> Duration in
+                try sink.write(chunk)
+                let started = ContinuousClock.now
+                try sink.finalize()
+                return ContinuousClock.now - started
+            }
+        }
+        let waited = try await stopADecoderThatNeverAnswers()
+        // The budget is 1 s. Five is loose enough for a loaded runner and still
+        // fails long before the suite timeout, which is how this used to be caught.
+        #expect(waited < .seconds(5))
+        // Cleanup, and a check in its own right: the timed-out finalize cancels the
+        // consumer Task, so the 3600 s sleep throws instead of parking a thread and
+        // a live sink with its recognizer for the rest of the suite.
+        try await waitUntil { released.sink == nil }
+        #expect(released.sink == nil, "the abandoned sink outlived its timed-out finalize")
+    }
+
+    /// The point of the bound is that stop really is over when it returns.
+    ///
+    /// `CaptureEngine.run` hands the recording back as soon as `finalize()`
+    /// returns and `RemoteControlAgent` reports the session finished right after,
+    /// so a client reading the transcript on that signal must not find it growing
+    /// afterwards. The decoder here comes back with a word only after the bound has
+    /// expired, which is what a CoreML call minutes behind actually does.
+    @Test func nothingReachesTheTranscriptAfterAFinalizeGivesUp() async throws {
+        let path = tempTranscriptPath()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let recognizer = ReleasableStreamingRecognizer()
+        let control = CaptureControl()
         let writer = try LiveTranscriptWriter(destination: .file(path), format: .json)
         let sink = StreamingLiveTranscriber(
-            recognizer: StalledStreamingRecognizer(), writer: writer, ownsWriter: true,
-            speaker: nil, resolver: nil, captureFormat: captureFormat, control: nil,
-            sourceKey: "single", gapSeconds: 0.7, maxLineSeconds: 12, labelName: "test",
-            finalizeTimeout: 1)
-        let chunk = silence(0.25)
-        // A real thread, so the decoder genuinely gets to run and hang: the only
-        // reason `finalize()` comes back is the bound.
+            recognizer: recognizer, writer: writer, ownsWriter: true, speaker: "You",
+            resolver: nil, captureFormat: captureFormat, control: control,
+            sourceKey: "single", gapSeconds: 0.12, maxLineSeconds: 12, labelName: "test",
+            finalizeTimeout: 0.5)
+
+        // Feed first and wait for the decoder to actually be inside `process`, so
+        // the bound below expires on a parked decode rather than racing the
+        // scheduler for it. On a single-wide cooperative pool under the full suite
+        // the consumer Task can otherwise take longer than the budget just to start.
+        try sink.write(silence(0.25))
+        try await waitUntil { recognizer.hasParked }
+        #expect(recognizer.hasParked, "the decoder never got to run, so nothing was pending")
+
         let waited = try await offCooperativePool { () -> Duration in
-            try sink.write(chunk)
             let started = ContinuousClock.now
             try sink.finalize()
             return ContinuousClock.now - started
         }
-        #expect(waited < .seconds(15))
+        #expect(waited < .seconds(5))
+        #expect(try readLines(path).isEmpty, "a line landed before the decoder answered")
+
+        // Now the decoder answers, after the recording was handed back. Its word
+        // would close a line: 0.17 s of decoded silence past it is more than the
+        // 0.12 s gap. It must not reach the transcript, the status partial or the
+        // screen.
+        recognizer.release()
+        try await waitUntil { recognizer.hasReturned }
+        #expect(recognizer.hasReturned, "the decoder never came back, so nothing was proved")
+        try await waitUntil(timeout: .milliseconds(500)) { !((try? readLines(path))?.isEmpty ?? true) }
+        #expect(
+            try readLines(path).isEmpty,
+            "a line landed after finalize() returned and the session was reported finished")
+        #expect(control.partialLine == nil, "the open line was republished after stop")
     }
 
     /// Two streams publish independently: clearing one leaves the other, and the

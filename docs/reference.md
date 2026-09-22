@@ -136,7 +136,10 @@ recording anyway so the audio captured so far stays playable — after
 `$HARK_TEARDOWN_TIMEOUT` seconds (default 5; `0` waits indefinitely). The same
 budget bounds how long a `--live-streaming` run waits at stop for its decoder to
 catch up, so a decoder that has fallen behind costs the last words of the
-transcript rather than the stop.
+transcript rather than the stop. Those words are dropped, not delivered late: once
+the budget expires hark stops that sink writing, so the transcript is complete and
+final the moment stop returns and a client reading it on the finished signal never
+sees it grow.
 
 ## Working directory
 
