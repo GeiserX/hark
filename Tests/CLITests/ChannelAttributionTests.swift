@@ -266,7 +266,11 @@ struct ChannelAttributionDispatchTests {
 
     /// A quarter-second 440 Hz tone: enough to be a real audio file.
     private func tone() -> [Float] {
-        (0..<4000).map { Float(sin(2 * .pi * 440 * Double($0) / 16000)) * 0.5 }
+        // Spelled out with explicit types: as one expression the CI runner's
+        // compiler gives up type-checking it ("unable to type-check this
+        // expression in reasonable time") and the whole suite fails to build.
+        let step: Double = 2.0 * Double.pi * 440.0 / 16000.0
+        return (0..<4000).map { (i: Int) -> Float in Float(sin(Double(i) * step)) * 0.5 }
     }
 }
 
