@@ -147,8 +147,18 @@ final class NemotronStreamingRecognizer: StreamingRecognizer, @unchecked Sendabl
         // Re-reading the timings costs an actor hop and an array copy; the list
         // can only have changed when a new chunk went through the decoder.
         if decodedMore {
-            let mapped = Self.map(await manager.getTokenTimings())
-            lock.withLock { tokens = mapped }
+            let timings = await manager.getTokenTimings()
+            lock.withLock {
+                // The manager's list is append-only within a session, so only
+                // the suffix is new. Re-mapping the whole list every chunk
+                // allocates an array and a String per token over the entire
+                // call, which is quadratic in the call's length.
+                if timings.count >= tokens.count {
+                    tokens.append(contentsOf: Self.map(timings[tokens.count...]))
+                } else {
+                    tokens = Self.map(timings)
+                }
+            }
         }
         return lock.withLock { tokens }
     }
@@ -159,7 +169,7 @@ final class NemotronStreamingRecognizer: StreamingRecognizer, @unchecked Sendabl
         return mapped
     }
 
-    private static func map(_ timings: [TokenTiming]) -> [RecognizedToken] {
+    private static func map(_ timings: some Sequence<TokenTiming>) -> [RecognizedToken] {
         timings.map {
             RecognizedToken(piece: $0.token, start: $0.startTime, end: $0.endTime)
         }
