@@ -31,6 +31,21 @@ private func token(_ piece: String, _ start: Double) -> RecognizedToken {
     RecognizedToken(piece: piece, start: start, end: start + 0.08)
 }
 
+/// Seconds at an encoder-frame index, the way FluidAudio computes them: an exact
+/// multiple of 0.08 with the rounding that implies. Tests about the gap floor have
+/// to use this rather than literal seconds, or they test arithmetic the recognizer
+/// never does.
+private func frame(_ index: Int) -> Double {
+    Double(index) * StreamingLineCutter.encoderFrameSeconds
+}
+
+/// A one-frame token starting at the given encoder-frame index.
+private func frameToken(_ piece: String, _ index: Int) -> RecognizedToken {
+    RecognizedToken(
+        piece: piece, start: frame(index),
+        end: frame(index) + StreamingLineCutter.encoderFrameSeconds)
+}
+
 /// Deterministic stand-in for the streaming ASR model: each scripted token
 /// becomes visible once the given number of seconds has been fed, and the token
 /// list only grows, the same contract the real recognizer has. Lets the sink's
@@ -167,14 +182,53 @@ struct StreamingTranscriptionTests {
     /// line. Contiguous speech is one line, closed by the trailing silence.
     @Test func keepsContiguousTokensTogetherWhenThePauseIsZero() {
         var cutter = StreamingLineCutter(gapSeconds: 0, maxLineSeconds: 12)
-        let tokens = [
-            token("\u{2581}one", 0), token("\u{2581}two", 0.08), token("\u{2581}three", 0.16),
-        ]
+        let tokens = [frameToken("\u{2581}one", 0), frameToken("\u{2581}two", 1), frameToken("\u{2581}three", 2)]
         // Decoded audio ends with the last token, so nothing has closed yet.
-        #expect(cutter.cut(tokens: tokens, processedSeconds: 0.24) == [])
-        // One frame of silence past it closes the line, all three tokens at once.
-        #expect(cutter.cut(tokens: tokens, processedSeconds: 0.32) == [0..<3])
+        #expect(cutter.cut(tokens: tokens, processedSeconds: frame(3)) == [])
+        // The clamped pause of 1.5 frames closes the line, all three at once.
+        #expect(cutter.cut(tokens: tokens, processedSeconds: frame(5)) == [0..<3])
         #expect(cutter.finalized == 3)
+    }
+
+    /// The floor has to sit strictly between one and two encoder frames, not on
+    /// one.
+    ///
+    /// FluidAudio times tokens at exact multiples of 0.08, so two words with a
+    /// single blank frame between them are exactly one frame apart, and in doubles
+    /// that gap compares `>= 0.08` at some frame positions and `< 0.08` at others.
+    /// A floor of one frame therefore broke the line at
+    /// about two fifths of ordinary word boundaries, picked by where in the stream
+    /// the words happened to fall. Frame indices here rather than literal seconds,
+    /// so the arithmetic is the recognizer's own and the rounding is real.
+    ///
+    /// Frame 18 is one of the positions that compares `>=` on the old floor, so
+    /// this goes red on it and green on 1.5 frames.
+    @Test func oneBlankFrameBetweenWordsIsNotAPause() {
+        var cutter = StreamingLineCutter(gapSeconds: 0, maxLineSeconds: 12)
+        // "one" at frame 18, one blank frame, "two" at frame 20.
+        let tokens = [frameToken("\u{2581}one", 18), frameToken("\u{2581}two", 20)]
+        #expect(cutter.cut(tokens: tokens, processedSeconds: frame(21)) == [])
+        #expect(cutter.finalized == 0)
+
+        // Two blank frames is a real gap and still cuts, so the floor did not
+        // simply stop the cutter working.
+        var wider = StreamingLineCutter(gapSeconds: 0, maxLineSeconds: 12)
+        let spaced = [frameToken("\u{2581}one", 18), frameToken("\u{2581}two", 21)]
+        #expect(wider.cut(tokens: spaced, processedSeconds: frame(22)) == [0..<1])
+        #expect(wider.finalized == 1)
+    }
+
+    /// Every frame position behaves the same way, which is the property the old
+    /// floor did not have: on a one-frame floor this sweep reports 788 of the 2000
+    /// positions cutting and 1212 not.
+    @Test func noFramePositionTurnsOneBlankFrameIntoAPause() {
+        for index in 0..<2000 {
+            var cutter = StreamingLineCutter(gapSeconds: 0, maxLineSeconds: 12)
+            let tokens = [frameToken("\u{2581}a", index), frameToken("\u{2581}b", index + 2)]
+            #expect(
+                cutter.cut(tokens: tokens, processedSeconds: frame(index + 3)) == [],
+                "one blank frame cut the line at frame \(index)")
+        }
     }
 
     @Test func cutsOnTheWindowCap() {
